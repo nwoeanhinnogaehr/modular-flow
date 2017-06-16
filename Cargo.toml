@@ -1,0 +1,6 @@
+[package]
+name = "gpdc"
+version = "0.0.0"
+authors = ["Noah Weninger <nweninge@ualberta.ca>"]
+
+[dependencies]
