@@ -1,3 +1,10 @@
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct NodeID(pub usize);
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct InPortID(pub usize);
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct OutPortID(pub usize);
+
 /**
  * A node is a processing unit.
  *
@@ -7,9 +14,10 @@
  * At the moment there is no way for user code to get a mut Node.
  */
 pub struct Node {
-    id: usize,
+    id: NodeID,
     in_ports: Vec<InPort>,
-    out_ports: Vec<OutPort>
+    out_ports: Vec<OutPort>,
+    variadic: bool
 }
 
 impl Node {
@@ -19,11 +27,20 @@ impl Node {
      * User code should never need to call this. So for now, it is public to the crate only.
      * User code should use `Graph::add_node` instead.
      */
-    pub(crate) fn new(id: usize, num_in: usize, num_out: usize) -> Node {
+    pub(crate) fn new(id: NodeID, num_in: usize, num_out: usize) -> Node {
         Node {
             id,
             in_ports: vec![InPort::void(); num_in],
             out_ports: vec![OutPort::void(); num_out],
+            variadic: false
+        }
+    }
+    pub(crate) fn new_variadic(id: NodeID) -> Node {
+        Node {
+            id,
+            in_ports: Vec::new(),
+            out_ports: Vec::new(),
+            variadic: true
         }
     }
     pub fn has_inputs(&self) -> bool {
@@ -43,17 +60,47 @@ impl Node {
             NodeType::Sink
         }
     }
-    pub fn in_port(&self, port_id: usize) -> &InPort {
-        &self.in_ports[port_id]
+    pub fn in_port(&self, port_id: InPortID) -> &InPort {
+        &self.in_ports[port_id.0]
     }
-    pub fn out_port(&self, port_id: usize) -> &OutPort {
-        &self.out_ports[port_id]
+    pub fn out_port(&self, port_id: OutPortID) -> &OutPort {
+        &self.out_ports[port_id.0]
     }
-    pub fn in_port_mut(&mut self, port_id: usize) -> &mut InPort {
-        &mut self.in_ports[port_id]
+    pub fn in_port_mut(&mut self, port_id: InPortID) -> &mut InPort {
+        &mut self.in_ports[port_id.0]
     }
-    pub fn out_port_mut(&mut self, port_id: usize) -> &mut OutPort {
-        &mut self.out_ports[port_id]
+    pub fn out_port_mut(&mut self, port_id: OutPortID) -> &mut OutPort {
+        &mut self.out_ports[port_id.0]
+    }
+    pub fn push_in_port(&mut self) -> Result<usize, ()> {
+        if self.variadic {
+            self.in_ports.push(InPort::void());
+            Ok(self.in_ports.len() - 1)
+        } else {
+            Err(())
+        }
+    }
+    pub fn push_out_port(&mut self) -> Result<usize, ()> {
+        if self.variadic {
+            self.out_ports.push(OutPort::void());
+            Ok(self.out_ports.len() - 1)
+        } else {
+            Err(())
+        }
+    }
+    pub fn pop_in_port(&mut self) -> Result<usize, ()> {
+        if self.variadic {
+            self.in_ports.pop().map_or(Err(()), |_| Ok(self.in_ports.len()))
+        } else {
+            Err(())
+        }
+    }
+    pub fn pop_out_port(&mut self) -> Result<usize, ()> {
+        if self.variadic {
+            self.out_ports.pop().map_or(Err(()), |_| Ok(self.in_ports.len()))
+        } else {
+            Err(())
+        }
     }
 }
 
@@ -76,18 +123,23 @@ pub enum NodeType {
  * An edge is like a vector pointing to a specific port of a specific node, originating from
  * nowhere in particular.
  */
-#[derive(Copy, Clone)]
-pub struct Edge {
-    pub node_id: usize,
-    pub port_id: usize
+#[derive(Copy, Clone, Debug)]
+pub struct InEdge {
+    pub node_id: NodeID,
+    pub port_id: InPortID
+}
+#[derive(Copy, Clone, Debug)]
+pub struct OutEdge {
+    pub node_id: NodeID,
+    pub port_id: OutPortID
 }
 
 /**
  * Optionally holds the edge that this port depends on.
  */
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct InPort {
-    pub edge: Option<Edge>
+    pub edge: Option<OutEdge>
 }
 
 impl InPort {
@@ -102,9 +154,9 @@ impl InPort {
 /**
  * Has a vector of Edges that depend on this port.
  */
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OutPort {
-    pub edges: Vec<Edge>
+    pub edges: Vec<InEdge>
 }
 
 impl OutPort {
