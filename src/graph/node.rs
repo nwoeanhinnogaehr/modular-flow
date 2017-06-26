@@ -17,7 +17,8 @@ pub struct Node {
     id: NodeID,
     in_ports: Vec<InPort>,
     out_ports: Vec<OutPort>,
-    variadic: bool
+    pub attached: bool,
+    variadic: bool,
 }
 
 impl Node {
@@ -32,7 +33,8 @@ impl Node {
             id,
             in_ports: vec![InPort::void(); num_in],
             out_ports: vec![OutPort::void(); num_out],
-            variadic: false
+            attached: false,
+            variadic: false,
         }
     }
     pub(crate) fn new_variadic(id: NodeID) -> Node {
@@ -40,7 +42,8 @@ impl Node {
             id,
             in_ports: Vec::new(),
             out_ports: Vec::new(),
-            variadic: true
+            attached: false,
+            variadic: true,
         }
     }
     pub fn has_inputs(&self) -> bool {
@@ -53,7 +56,7 @@ impl Node {
         if self.has_inputs() && self.has_outputs() {
             NodeType::Internal
         } else if !self.has_inputs() && !self.has_outputs() {
-            NodeType::Useless
+            NodeType::Observer
         } else if self.has_outputs() {
             NodeType::Source
         } else /* if self.has_inputs() */ {
@@ -115,8 +118,8 @@ pub enum NodeType {
     Internal,
     /// A `Sink` Node has no output ports.
     Sink,
-    /// A `Useless` Node has no input or output ports.
-    Useless
+    /// A `Observer` Node has no input or output ports.
+    Observer
 }
 
 /**
@@ -128,10 +131,20 @@ pub struct InEdge {
     pub node_id: NodeID,
     pub port_id: InPortID
 }
+impl InEdge {
+    pub fn new(node_id: NodeID, port_id: InPortID) -> InEdge {
+        InEdge { node_id, port_id }
+    }
+}
 #[derive(Copy, Clone, Debug)]
 pub struct OutEdge {
     pub node_id: NodeID,
     pub port_id: OutPortID
+}
+impl OutEdge {
+    pub fn new(node_id: NodeID, port_id: OutPortID) -> OutEdge {
+        OutEdge { node_id, port_id }
+    }
 }
 
 /**
@@ -139,7 +152,8 @@ pub struct OutEdge {
  */
 #[derive(Clone, Debug)]
 pub struct InPort {
-    pub edge: Option<OutEdge>
+    pub edge: Option<OutEdge>,
+    pub buffer: Vec<u8>,
 }
 
 impl InPort {
@@ -147,7 +161,10 @@ impl InPort {
      * Construct a void port. Void ports are not connected.
      */
     fn void() -> InPort {
-        InPort { edge: None }
+        InPort {
+            edge: None,
+            buffer: Vec::new()
+        }
     }
 }
 

@@ -1,10 +1,12 @@
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
 /// node
 pub mod node;
 
 pub use self::node::*;
 
 pub struct Graph {
-    nodes: Vec<Node>,
+    nodes: Vec<RwLock<Node>>,
 }
 
 impl Graph {
@@ -16,11 +18,11 @@ impl Graph {
     /**
      * Get a node by ID.
      */
-    pub fn node(&self, node_id: NodeID) -> &Node {
-        &self.nodes[node_id.0]
+    pub fn node(&self, node_id: NodeID) -> RwLockReadGuard<Node> {
+        self.nodes[node_id.0].read().unwrap()
     }
-    fn node_mut(&mut self, node_id: NodeID) -> &mut Node {
-        &mut self.nodes[node_id.0]
+    pub fn node_mut(&self, node_id: NodeID) -> RwLockWriteGuard<Node> {
+        self.nodes[node_id.0].write().unwrap()
     }
     /**
      * Add a node with a fixed number of input and output ports.
@@ -28,7 +30,7 @@ impl Graph {
      */
     pub fn add_node(&mut self, num_in: usize, num_out: usize) -> NodeID {
         let id = NodeID(self.nodes.len());
-        self.nodes.push(Node::new(id, num_in, num_out));
+        self.nodes.push(RwLock::new(Node::new(id, num_in, num_out)));
         id
     }
     /**
@@ -37,7 +39,7 @@ impl Graph {
      */
     pub fn add_variadic_node(&mut self) -> NodeID {
         let id = NodeID(self.nodes.len());
-        self.nodes.push(Node::new_variadic(id));
+        self.nodes.push(RwLock::new(Node::new_variadic(id)));
         id
     }
     /**
@@ -61,10 +63,34 @@ impl Graph {
      * Returns Err if the port is not connected.
      */
     pub fn disconnect(&mut self, node_id: NodeID, port_id: InPortID) -> Result<OutEdge, ()> {
-        if let Some(edge) = self.node(node_id).in_port(port_id).edge {
+        // need to be careful about deadlocks here.
+        // TODO make it harder to deadlock
+        let edge = self.node(node_id).in_port(port_id).edge;
+        if let Some(edge) = edge {
             self.node_mut(edge.node_id).out_port_mut(edge.port_id).edges
                 .retain(|&x| !(x.node_id == node_id && x.port_id == port_id));
             self.node_mut(node_id).in_port_mut(port_id).edge.take().ok_or(())
+        } else {
+            Err(())
+        }
+    }
+
+    pub fn attach_thread(&self, node_id: NodeID) -> Result<(), ()> {
+        println!("atttach thread {:?}", node_id);
+        let attached = &mut self.node_mut(node_id).attached;
+        if *attached {
+            Err(())
+        } else {
+            *attached = true;
+            Ok(())
+        }
+    }
+    pub fn detach_thread(&self, node_id: NodeID) -> Result<(), ()> {
+        println!("detach thread {:?}", node_id);
+        let attached = &mut self.node_mut(node_id).attached;
+        if *attached {
+            *attached = false;
+            Ok(())
         } else {
             Err(())
         }

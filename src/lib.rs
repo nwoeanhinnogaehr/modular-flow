@@ -1,3 +1,4 @@
+
 /// graph
 pub mod graph;
 pub mod supervisor;
@@ -6,6 +7,7 @@ pub mod supervisor;
 mod tests {
     use graph::*;
     use supervisor::*;
+    use std::thread;
 
     #[test]
     fn graph_connect() {
@@ -30,7 +32,7 @@ mod tests {
         let internal = g.add_node(1, 22);
         assert_eq!(g.node(internal).node_type(), NodeType::Internal);
         let useless = g.add_node(0, 0);
-        assert_eq!(g.node(useless).node_type(), NodeType::Useless);
+        assert_eq!(g.node(useless).node_type(), NodeType::Observer);
     }
     #[test]
     fn supervisor_test() {
@@ -40,7 +42,32 @@ mod tests {
         let sink = g.add_node(1, 0);
         g.connect(source, OutPortID(0), internal, InPortID(0)).unwrap();
         g.connect(internal, OutPortID(0), sink, InPortID(0)).unwrap();
-        let mut s = Supervisor::new(g);
+        let s = Supervisor::new(g);
+        let src_ctx = s.node_ctx(source).unwrap();
+        thread::spawn(move || {
+            loop {
+                let data: Vec<u8> = vec![1, 2, 3, 4, 5];
+                src_ctx.write(OutPortID(0), &data);
+                thread::yield_now();
+            }
+        });
+        let int_ctx = s.node_ctx(internal).unwrap();
+        thread::spawn(move || {
+            loop {
+                let data = int_ctx.read_any::<u8>(InPortID(0));
+                println!("int {:?}", data);
+                int_ctx.write(OutPortID(0), data);
+                thread::yield_now();
+            }
+        });
+        let snk_ctx = s.node_ctx(sink).unwrap();
+        thread::spawn(move || {
+            loop {
+                let data = snk_ctx.read_any::<u8>(InPortID(0));
+                println!("sink {:?}", data);
+                thread::yield_now();
+            }
+        });
         s.run();
     }
 }
