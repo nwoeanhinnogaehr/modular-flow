@@ -12,26 +12,26 @@ use std::ops::Deref;
  */
 pub struct NodeContext {
     id: NodeID,
-    sched: Arc<Scheduler>
+    sched: Arc<Scheduler>,
 }
 
 pub struct Data<'a, T: 'a> {
     data: Vec<T>,
-    phantom: PhantomData<&'a T>
+    phantom: PhantomData<&'a T>,
 }
 
 impl<'a, T: 'a> Data<'a, T> {
     pub fn new(data: Vec<T>) -> Data<'a, T> {
         Data {
             data,
-            phantom: Default::default()
+            phantom: Default::default(),
         }
     }
 }
 
 pub struct MutData<'a, T: 'a> {
     data: Vec<T>,
-    phantom: PhantomData<&'a T>
+    phantom: PhantomData<&'a T>,
 }
 
 impl<'a, T> Deref for Data<'a, T> {
@@ -85,10 +85,10 @@ enum ReadRequest<'a, T: 'a> {
     AsyncN(usize),
     Any,
     N(usize),
-    Into(MutData<'a, T>)
+    Into(MutData<'a, T>),
 }
 struct FutureRead<'a, T: 'a> {
-    data: Data<'a, T>
+    data: Data<'a, T>,
 }
 impl<'a, T> FutureRead<'a, T> {
     fn wait(self) -> Data<'a, T> {
@@ -112,17 +112,16 @@ impl Supervisor {
         }
     }
     pub fn node_ctx<'a>(&'a self, node: NodeID) -> Result<NodeContext, ()> {
-        // TODO prevent multiple contexts being lent for the same node
-        self.sched.graph.attach_thread(node).map(|_|
+        self.sched.graph.attach_thread(node).map(|_| {
             NodeContext {
                 sched: self.sched.clone(),
                 id: node,
-            })
+            }
+        })
     }
     pub fn run(self) {
         loop {}
     }
-
 }
 
 pub struct Scheduler {
@@ -131,27 +130,27 @@ pub struct Scheduler {
 
 impl Scheduler {
     fn new(graph: Graph) -> Scheduler {
-        Scheduler {
-            graph,
-        }
+        Scheduler { graph }
     }
     fn write<'a, T>(&self, node: NodeID, port: OutPortID, data: Data<T>) {
         /*let data_bytes = unsafe {
             slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() * mem::size_of::<T>())
         };*/
-        /*
+
         let mut out_node = self.graph.node_mut(node);
         let mut out_port = out_node.out_port_mut(port);
 
-        for in_edge in &out_port.edges {
-            let in_node = self.graph.node(in_edge.node);
-            let in_port = in_node.in_port(in_edge.port);
-            // hmm what if the port isn't blocked?
-            // need to store data somewhere where the port can get it when it needs it.
-        }
-        */
+        let in_edge = out_port.edge.unwrap();
+        let in_node = self.graph.node(in_edge.node);
+        let in_port = in_node.in_port(in_edge.port);
+
     }
-    fn queue_read<'a, T: Copy>(&'a self, node: NodeID, port: InPortID, req: ReadRequest<'a, T>) -> FutureRead<'a, T> {
+    fn queue_read<'a, T: Copy>(
+        &'a self,
+        node: NodeID,
+        port: InPortID,
+        req: ReadRequest<'a, T>,
+    ) -> FutureRead<'a, T> {
         /*let mut in_node = self.graph.node_mut(node);
         let mut in_port = in_node.in_port_mut(port);
         match in_port.edge {
@@ -191,5 +190,4 @@ impl Scheduler {
         }*/
         unimplemented!();
     }
-
 }

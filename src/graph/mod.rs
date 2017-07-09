@@ -11,9 +11,7 @@ pub struct Graph {
 
 impl Graph {
     pub fn new() -> Graph {
-        Graph {
-            nodes: Vec::new()
-        }
+        Graph { nodes: Vec::new() }
     }
     /**
      * Get a node by ID.
@@ -45,11 +43,19 @@ impl Graph {
     /**
      * Connects output port `src_port` of node `src_id` to input port `dst_port` of node `dst_id`.
      *
-     * Returns Err if `src_port` or `dst_port` is already connected. You must call `disconnect` on the destination first.
+     * Returns Err if `src_port` or `dst_port` is already connected.
+     * You must call `disconnect` on the destination first.
      */
-    pub fn connect(&mut self, src_id: NodeID, src_port: OutPortID, dst_id: NodeID, dst_port: InPortID) -> Result<(), ()> {
+    pub fn connect(
+        &mut self,
+        src_id: NodeID,
+        src_port: OutPortID,
+        dst_id: NodeID,
+        dst_port: InPortID,
+    ) -> Result<(), ()> {
         if self.node(dst_id).in_port(dst_port).edge.is_some() ||
-           self.node(src_id).out_port(src_port).edge.is_some() {
+            self.node(src_id).out_port(src_port).edge.is_some()
+        {
             Err(())
         } else {
             self.node_mut(src_id).out_port_mut(src_port).edge = Some(InEdge::new(dst_id, dst_port));
@@ -64,10 +70,15 @@ impl Graph {
      * Returns Err if the port is not connected.
      */
     pub fn disconnect(&mut self, node_id: NodeID, port_id: InPortID) -> Result<OutEdge, ()> {
-        self.node_mut(node_id).in_port_mut(port_id).edge.take().and_then(|edge| {
-            self.node_mut(edge.node).out_port_mut(edge.port).edge = None;
-            Some(edge)
-        }).ok_or(())
+        self.node_mut(node_id)
+            .in_port_mut(port_id)
+            .edge
+            .take()
+            .and_then(|edge| {
+                self.node_mut(edge.node).out_port_mut(edge.port).edge = None;
+                Some(edge)
+            })
+            .ok_or(())
     }
 
     pub fn attach_thread(&self, node_id: NodeID) -> Result<(), ()> {

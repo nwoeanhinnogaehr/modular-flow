@@ -59,7 +59,9 @@ impl Node {
             NodeType::Observer
         } else if self.has_outputs() {
             NodeType::Source
-        } else /* if self.has_inputs() */ {
+        } else
+        /* if self.has_inputs() */
+        {
             NodeType::Sink
         }
     }
@@ -93,14 +95,18 @@ impl Node {
     }
     pub fn pop_in_port(&mut self) -> Result<usize, ()> {
         if self.variadic {
-            self.in_ports.pop().map_or(Err(()), |_| Ok(self.in_ports.len()))
+            self.in_ports
+                .pop()
+                .map_or(Err(()), |_| Ok(self.in_ports.len()))
         } else {
             Err(())
         }
     }
     pub fn pop_out_port(&mut self) -> Result<usize, ()> {
         if self.variadic {
-            self.out_ports.pop().map_or(Err(()), |_| Ok(self.in_ports.len()))
+            self.out_ports
+                .pop()
+                .map_or(Err(()), |_| Ok(self.in_ports.len()))
         } else {
             Err(())
         }
@@ -119,7 +125,7 @@ pub enum NodeType {
     /// A `Sink` Node has no output ports.
     Sink,
     /// A `Observer` Node has no input or output ports.
-    Observer
+    Observer,
 }
 
 /**
@@ -129,7 +135,7 @@ pub enum NodeType {
 #[derive(Copy, Clone, Debug)]
 pub struct InEdge {
     pub node: NodeID,
-    pub port: InPortID
+    pub port: InPortID,
 }
 impl InEdge {
     pub fn new(node: NodeID, port: InPortID) -> InEdge {
@@ -139,7 +145,7 @@ impl InEdge {
 #[derive(Copy, Clone, Debug)]
 pub struct OutEdge {
     pub node: NodeID,
-    pub port: OutPortID
+    pub port: OutPortID,
 }
 impl OutEdge {
     pub fn new(node: NodeID, port: OutPortID) -> OutEdge {
@@ -160,9 +166,7 @@ impl InPort {
      * Construct a void port. Void ports are not connected.
      */
     fn void() -> InPort {
-        InPort {
-            edge: None,
-        }
+        InPort { edge: None }
     }
 }
 
@@ -179,8 +183,6 @@ impl OutPort {
      * Construct a void port. Void ports are not connected.
      */
     fn void() -> OutPort {
-        OutPort {
-            edge: None,
-        }
+        OutPort { edge: None }
     }
 }
