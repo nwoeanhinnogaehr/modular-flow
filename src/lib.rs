@@ -23,6 +23,24 @@ mod tests {
     }
 
     #[test]
+    fn graph_connect_many() {
+        let mut g = Graph::new();
+        let source = g.add_node(0, 2);
+        let sink = g.add_node(2, 0);
+        g.disconnect(sink, InPortID(0)).unwrap_err();
+        g.disconnect(sink, InPortID(1)).unwrap_err();
+        g.connect(source, OutPortID(0), sink, InPortID(0)).unwrap();
+        g.connect(source, OutPortID(0), sink, InPortID(0)).unwrap_err();
+        g.connect(source, OutPortID(1), sink, InPortID(0)).unwrap_err();
+        g.connect(source, OutPortID(1), sink, InPortID(1)).unwrap();
+        g.disconnect(sink, InPortID(0)).unwrap();
+        g.disconnect(sink, InPortID(0)).unwrap_err();
+        g.connect(source, OutPortID(0), sink, InPortID(1)).unwrap_err();
+        g.disconnect(sink, InPortID(1)).unwrap();
+        g.connect(source, OutPortID(0), sink, InPortID(1)).unwrap();
+    }
+
+    #[test]
     fn node_types() {
         let mut g = Graph::new();
         let source = g.add_node(0, 1);
@@ -68,6 +86,6 @@ mod tests {
                 thread::yield_now();
             }
         });
-        s.run();
+        //s.run();
     }
 }

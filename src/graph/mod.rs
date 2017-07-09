@@ -45,13 +45,14 @@ impl Graph {
     /**
      * Connects output port `src_port` of node `src_id` to input port `dst_port` of node `dst_id`.
      *
-     * Returns Err if `dst_port` is already connected. You must call `disconnect` on the destination first.
+     * Returns Err if `src_port` or `dst_port` is already connected. You must call `disconnect` on the destination first.
      */
     pub fn connect(&mut self, src_id: NodeID, src_port: OutPortID, dst_id: NodeID, dst_port: InPortID) -> Result<(), ()> {
-        if self.node(dst_id).in_port(dst_port).edge.is_some() {
+        if self.node(dst_id).in_port(dst_port).edge.is_some() ||
+           self.node(src_id).out_port(src_port).edge.is_some() {
             Err(())
         } else {
-            self.node_mut(src_id).out_port_mut(src_port).edges.push(InEdge::new(dst_id, dst_port));
+            self.node_mut(src_id).out_port_mut(src_port).edge = Some(InEdge::new(dst_id, dst_port));
             self.node_mut(dst_id).in_port_mut(dst_port).edge = Some(OutEdge::new(src_id, src_port));
             Ok(())
         }
@@ -63,16 +64,10 @@ impl Graph {
      * Returns Err if the port is not connected.
      */
     pub fn disconnect(&mut self, node_id: NodeID, port_id: InPortID) -> Result<OutEdge, ()> {
-        // need to be careful about deadlocks here.
-        // TODO make it harder to deadlock
-        let edge = self.node(node_id).in_port(port_id).edge;
-        if let Some(edge) = edge {
-            self.node_mut(edge.node).out_port_mut(edge.port).edges
-                .retain(|&x| !(x.node == node_id && x.port == port_id));
-            self.node_mut(node_id).in_port_mut(port_id).edge.take().ok_or(())
-        } else {
-            Err(())
-        }
+        self.node_mut(node_id).in_port_mut(port_id).edge.take().and_then(|edge| {
+            self.node_mut(edge.node).out_port_mut(edge.port).edge = None;
+            Some(edge)
+        }).ok_or(())
     }
 
     pub fn attach_thread(&self, node_id: NodeID) -> Result<(), ()> {

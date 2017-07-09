@@ -171,8 +171,7 @@ impl InPort {
  */
 #[derive(Clone, Debug)]
 pub struct OutPort {
-    pub edges: Vec<InEdge>,
-    pub buffer: Vec<u8>,
+    pub edge: Option<InEdge>,
 }
 
 impl OutPort {
@@ -181,8 +180,7 @@ impl OutPort {
      */
     fn void() -> OutPort {
         OutPort {
-            edges: Vec::new(),
-            buffer: Vec::new(),
+            edge: None,
         }
     }
 }

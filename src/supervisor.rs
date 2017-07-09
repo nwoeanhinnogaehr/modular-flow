@@ -139,6 +139,7 @@ impl Scheduler {
         /*let data_bytes = unsafe {
             slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() * mem::size_of::<T>())
         };*/
+        /*
         let mut out_node = self.graph.node_mut(node);
         let mut out_port = out_node.out_port_mut(port);
 
@@ -148,9 +149,10 @@ impl Scheduler {
             // hmm what if the port isn't blocked?
             // need to store data somewhere where the port can get it when it needs it.
         }
+        */
     }
     fn queue_read<'a, T: Copy>(&'a self, node: NodeID, port: InPortID, req: ReadRequest<'a, T>) -> FutureRead<'a, T> {
-        let mut in_node = self.graph.node_mut(node);
+        /*let mut in_node = self.graph.node_mut(node);
         let mut in_port = in_node.in_port_mut(port);
         match in_port.edge {
             Some(in_edge) => {
@@ -186,7 +188,8 @@ impl Scheduler {
                 // block until connected?
                 // or error?
             }
-        }
+        }*/
+        unimplemented!();
     }
 
 }
