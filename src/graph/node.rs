@@ -128,22 +128,22 @@ pub enum NodeType {
  */
 #[derive(Copy, Clone, Debug)]
 pub struct InEdge {
-    pub node_id: NodeID,
-    pub port_id: InPortID
+    pub node: NodeID,
+    pub port: InPortID
 }
 impl InEdge {
-    pub fn new(node_id: NodeID, port_id: InPortID) -> InEdge {
-        InEdge { node_id, port_id }
+    pub fn new(node: NodeID, port: InPortID) -> InEdge {
+        InEdge { node, port }
     }
 }
 #[derive(Copy, Clone, Debug)]
 pub struct OutEdge {
-    pub node_id: NodeID,
-    pub port_id: OutPortID
+    pub node: NodeID,
+    pub port: OutPortID
 }
 impl OutEdge {
-    pub fn new(node_id: NodeID, port_id: OutPortID) -> OutEdge {
-        OutEdge { node_id, port_id }
+    pub fn new(node: NodeID, port: OutPortID) -> OutEdge {
+        OutEdge { node, port }
     }
 }
 
@@ -153,7 +153,6 @@ impl OutEdge {
 #[derive(Clone, Debug)]
 pub struct InPort {
     pub edge: Option<OutEdge>,
-    pub buffer: Vec<u8>,
 }
 
 impl InPort {
@@ -163,7 +162,6 @@ impl InPort {
     fn void() -> InPort {
         InPort {
             edge: None,
-            buffer: Vec::new()
         }
     }
 }
@@ -173,7 +171,8 @@ impl InPort {
  */
 #[derive(Clone, Debug)]
 pub struct OutPort {
-    pub edges: Vec<InEdge>
+    pub edges: Vec<InEdge>,
+    pub buffer: Vec<u8>,
 }
 
 impl OutPort {
@@ -181,6 +180,9 @@ impl OutPort {
      * Construct a void port. Void ports are not connected.
      */
     fn void() -> OutPort {
-        OutPort { edges: Vec::new() }
+        OutPort {
+            edges: Vec::new(),
+            buffer: Vec::new(),
+        }
     }
 }

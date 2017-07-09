@@ -51,8 +51,8 @@ impl Graph {
         if self.node(dst_id).in_port(dst_port).edge.is_some() {
             Err(())
         } else {
-            self.node_mut(src_id).out_port_mut(src_port).edges.push(InEdge { node_id: dst_id, port_id: dst_port });
-            self.node_mut(dst_id).in_port_mut(dst_port).edge = Some(OutEdge { node_id: src_id, port_id: src_port });
+            self.node_mut(src_id).out_port_mut(src_port).edges.push(InEdge::new(dst_id, dst_port));
+            self.node_mut(dst_id).in_port_mut(dst_port).edge = Some(OutEdge::new(src_id, src_port));
             Ok(())
         }
     }
@@ -67,8 +67,8 @@ impl Graph {
         // TODO make it harder to deadlock
         let edge = self.node(node_id).in_port(port_id).edge;
         if let Some(edge) = edge {
-            self.node_mut(edge.node_id).out_port_mut(edge.port_id).edges
-                .retain(|&x| !(x.node_id == node_id && x.port_id == port_id));
+            self.node_mut(edge.node).out_port_mut(edge.port).edges
+                .retain(|&x| !(x.node == node_id && x.port == port_id));
             self.node_mut(node_id).in_port_mut(port_id).edge.take().ok_or(())
         } else {
             Err(())
