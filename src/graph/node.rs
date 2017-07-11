@@ -1,3 +1,6 @@
+use std::sync::{Barrier, Mutex};
+use std::cell::{RefCell};
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct NodeID(pub usize);
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -153,12 +156,32 @@ impl OutEdge {
     }
 }
 
+#[derive(Debug)]
+pub enum ReadRequest {
+    Async,
+    AsyncN(usize),
+    Any,
+    N(usize),
+}
+
 /**
  * Optionally holds the edge that this port depends on.
  */
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct InPort {
     pub edge: Option<OutEdge>,
+    pub ready: Barrier,
+    pub data: Mutex<RefCell<Vec<u8>>>,
+}
+
+impl Clone for InPort {
+    fn clone(&self) -> Self {
+        InPort {
+            edge: self.edge,
+            ready: Barrier::new(2),
+            data: Mutex::new(RefCell::new(Vec::new())),
+        }
+    }
 }
 
 impl InPort {
@@ -166,7 +189,11 @@ impl InPort {
      * Construct a void port. Void ports are not connected.
      */
     fn void() -> InPort {
-        InPort { edge: None }
+        InPort {
+            edge: None,
+            ready: Barrier::new(2),
+            data: Mutex::new(RefCell::new(Vec::new())),
+        }
     }
 }
 

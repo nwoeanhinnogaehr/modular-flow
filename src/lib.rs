@@ -88,6 +88,6 @@ mod tests {
                 thread::yield_now();
             }
         });
-        //s.run();
+        s.run();
     }
 }

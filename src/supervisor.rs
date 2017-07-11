@@ -66,7 +66,7 @@ impl NodeContext {
     /*pub fn read_into<T: Clone>(&self, port: InPortID, dest: MutData<T>) {
         self.read(port, ReadRequest::Into(dest)).wait();
     }*/
-    fn read<'a, T: Copy>(&'a self, port: InPortID, req: ReadRequest<'a, T>) -> FutureRead<'a, T> {
+    fn read<'a, T: Copy>(&'a self, port: InPortID, req: ReadRequest) -> FutureRead<'a, T> {
         self.sched.queue_read(self.id, port, req)
     }
     pub fn write<T: Copy>(&self, port: OutPortID, src: Data<T>) {
@@ -80,13 +80,6 @@ impl Drop for NodeContext {
     }
 }
 
-enum ReadRequest<'a, T: 'a> {
-    Async,
-    AsyncN(usize),
-    Any,
-    N(usize),
-    Into(MutData<'a, T>),
-}
 struct FutureRead<'a, T: 'a> {
     data: Data<'a, T>,
 }
@@ -133,51 +126,72 @@ impl Scheduler {
         Scheduler { graph }
     }
     fn write<'a, T>(&self, node: NodeID, port: OutPortID, data: Data<T>) {
-        /*let data_bytes = unsafe {
+        let data_bytes: &[u8] = unsafe {
             slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() * mem::size_of::<T>())
-        };*/
+        };
 
-        let mut out_node = self.graph.node_mut(node);
-        let mut out_port = out_node.out_port_mut(port);
+        let out_node = self.graph.node(node);
+        let out_port = out_node.out_port(port);
 
         let in_edge = out_port.edge.unwrap();
         let in_node = self.graph.node(in_edge.node);
         let in_port = in_node.in_port(in_edge.port);
+        {
+            let data = in_port.data.lock().unwrap();
+            data.borrow_mut().extend(data_bytes);
+        }
+        println!("write wait");
+        in_port.ready.wait();
+        println!("write waited");
 
+        // determine how much data the in port is waiting for (if any)
+        // setup pointers and wake up in port
+        // or if it isn't waiting, copy data so it can go ahead on it's own
+        // but make sure not to let multiple writes happen before a read (maybe)
+        // there's a problem here: a writer going much faster than the corresponsing reader
+        // may fill up the memory. but if we block, it may lead to deadlock or non-rt processing.
     }
     fn queue_read<'a, T: Copy>(
         &'a self,
         node: NodeID,
         port: InPortID,
-        req: ReadRequest<'a, T>,
+        req: ReadRequest,
     ) -> FutureRead<'a, T> {
-        /*let mut in_node = self.graph.node_mut(node);
-        let mut in_port = in_node.in_port_mut(port);
+        let in_node = self.graph.node(node);
+        let in_port = in_node.in_port(port);
         match in_port.edge {
             Some(in_edge) => {
                 println!("connected: {:?} {:?}", node, port);
-                let mut out_node = self.graph.node_mut(in_edge.node);
+                let out_node = self.graph.node(in_edge.node);
                 if out_node.attached {
-                    let mut out_port = out_node.out_port_mut(in_edge.port);
-                    //println!("endpoint attached");
-                    use self::ReadRequest::*;
-                    // TODO oops better watch out for ZSTs
-                    let max_avail = out_port.buffer.len() / mem::size_of::<T>();
-                    let len = match req {
-                        N(v) | AsyncN(v) => min(v, max_avail),
-                        Into(v) => min(v.len(), max_avail),
-                        Async | Any => max_avail
+                    let out_port = out_node.out_port(in_edge.port);
+                    let avail_bytes = {
+                        let data = in_port.data.lock().unwrap();
+                        let len = data.borrow().len();
+                        len
                     };
-                    let rd = FutureRead {
+                    println!("read wait");
+                    in_port.ready.wait();
+                    println!("read waited");
+                    let out_data = {
+                        let data_bytes = in_port.data.lock().unwrap();
+                        let mut data_bytes = data_bytes.borrow_mut();
+                        let data: Vec<T> = unsafe {
+                            slice::from_raw_parts(mem::transmute(data_bytes.as_ptr()), data_bytes.len() / mem::size_of::<T>()).iter().cloned().collect()
+                        };
+                        data_bytes.clear();
+                        data
+                    };
+                    FutureRead {
                         data: Data {
-                            data: unsafe {
-                                slice::from_raw_parts(mem::transmute(out_port.buffer.as_ptr()), len)
-                            }.iter().cloned().collect(),
-                            phantom: Default::default()
+                            data: out_data,
+                            phantom: PhantomData
                         }
-                    };
-                    out_port.buffer.clear();
-                    rd
+                    }
+                    // check how much data is available
+                    // if enough, take it
+                    // else, signal how much we want then sleep
+                    // once we wake up, take it
                 } else {
                     panic!("endpoint not attached");
                 }
@@ -187,7 +201,6 @@ impl Scheduler {
                 // block until connected?
                 // or error?
             }
-        }*/
-        unimplemented!();
+        }
     }
 }
