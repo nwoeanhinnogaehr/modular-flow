@@ -1,5 +1,24 @@
-use std::sync::{Barrier, Mutex};
-use std::cell::{RefCell};
+use std::sync::{Barrier, Mutex, MutexGuard, Condvar};
+use std::cell::{Cell, RefCell};
+
+// TODO Put this elsewhere
+// clean it up
+// get rid of copy constraint
+// consider removing cell
+#[derive(Debug, Default)]
+pub struct CondvarCell<T: Copy> {
+    pub mx: Mutex<Cell<T>>,
+    pub cv: Condvar,
+}
+
+impl<T: Copy> CondvarCell<T> {
+    pub fn new(init: T) -> CondvarCell<T> {
+        CondvarCell {
+            mx: Mutex::new(Cell::new(init)),
+            cv: Condvar::new(),
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct NodeID(pub usize);
@@ -170,30 +189,29 @@ pub enum ReadRequest {
 #[derive(Debug)]
 pub struct InPort {
     pub edge: Option<OutEdge>,
-    pub ready: Barrier,
+    pub read_begin: CondvarCell<bool>,
     pub data: Mutex<RefCell<Vec<u8>>>,
 }
 
 impl Clone for InPort {
     fn clone(&self) -> Self {
-        InPort {
-            edge: self.edge,
-            ready: Barrier::new(2),
-            data: Mutex::new(RefCell::new(Vec::new())),
-        }
+        InPort::new(self.edge)
     }
 }
 
 impl InPort {
+    fn new(edge: Option<OutEdge>) -> InPort {
+        InPort {
+            edge: edge,
+            read_begin: CondvarCell::new(false),
+            data: Mutex::new(RefCell::new(Vec::new())),
+        }
+    }
     /**
      * Construct a void port. Void ports are not connected.
      */
     fn void() -> InPort {
-        InPort {
-            edge: None,
-            ready: Barrier::new(2),
-            data: Mutex::new(RefCell::new(Vec::new())),
-        }
+        InPort::new(None)
     }
 }
 

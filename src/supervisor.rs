@@ -136,17 +136,35 @@ impl Scheduler {
         let in_edge = out_port.edge.unwrap();
         let in_node = self.graph.node(in_edge.node);
         let in_port = in_node.in_port(in_edge.port);
+
+        //TODO
+        // determine how much data the in port is waiting for (if any)
+        // i.e. check current readrequest
+
+        // "setup pointers"
+        // or if it isn't waiting, copy data so it can go ahead on it's own
         {
             let data = in_port.data.lock().unwrap();
             data.borrow_mut().extend(data_bytes);
         }
-        println!("write wait");
-        in_port.ready.wait();
-        println!("write waited");
 
-        // determine how much data the in port is waiting for (if any)
-        // setup pointers and wake up in port
-        // or if it isn't waiting, copy data so it can go ahead on it's own
+        // TODO
+        // signal that data is ready
+        // with a condition variable?
+        // with a channel?
+
+        // TODO wait for pointers to be grabbed: no longer waiting
+
+        { // wait for next read to begin
+            let mut lock = in_port.read_begin.mx.lock().unwrap();
+            while !lock.get() {
+                lock = in_port.read_begin.cv.wait(lock).unwrap();
+            }
+            lock.set(false);
+        }
+
+        // TODO destroy data
+
         // but make sure not to let multiple writes happen before a read (maybe)
         // there's a problem here: a writer going much faster than the corresponsing reader
         // may fill up the memory. but if we block, it may lead to deadlock or non-rt processing.
@@ -161,18 +179,30 @@ impl Scheduler {
         let in_port = in_node.in_port(port);
         match in_port.edge {
             Some(in_edge) => {
-                println!("connected: {:?} {:?}", node, port);
+                //println!("connected: {:?} {:?}", node, port);
                 let out_node = self.graph.node(in_edge.node);
                 if out_node.attached {
                     let out_port = out_node.out_port(in_edge.port);
+
+                    { // signal begin of read
+                        let mut lock = in_port.read_begin.mx.lock().unwrap();
+                        lock.set(true);
+                        in_port.read_begin.cv.notify_one();
+                    }
+
+                    // TODO check how much data is available
                     let avail_bytes = {
                         let data = in_port.data.lock().unwrap();
                         let len = data.borrow().len();
                         len
                     };
-                    println!("read wait");
-                    in_port.ready.wait();
-                    println!("read waited");
+
+                    // TODO if enough, continue
+
+                    // TODO signal that we are waiting for data
+
+                    // TODO wait for data
+
                     let out_data = {
                         let data_bytes = in_port.data.lock().unwrap();
                         let mut data_bytes = data_bytes.borrow_mut();
@@ -182,6 +212,9 @@ impl Scheduler {
                         data_bytes.clear();
                         data
                     };
+
+                    // TODO signal that we are no longer waiting for data
+
                     FutureRead {
                         data: Data {
                             data: out_data,
