@@ -70,7 +70,7 @@ mod tests {
         let src_ctx = s.node_ctx(source).unwrap();
         thread::spawn(move || loop {
             let data: Vec<u8> = vec![1, 2, 3, 4, 5];
-            src_ctx.write(OutPortID(0), Data::new(data));
+            src_ctx.write(OutPortID(0), &data);
             thread::yield_now();
         });
         /*let int_ctx = s.node_ctx(internal).unwrap();

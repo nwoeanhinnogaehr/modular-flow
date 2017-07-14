@@ -1,4 +1,4 @@
-use std::sync::{Barrier, Mutex, MutexGuard, Condvar};
+use std::sync::{Barrier, Mutex, MutexGuard, Condvar, Arc};
 use std::cell::{Cell, RefCell};
 
 // TODO Put this elsewhere
@@ -7,15 +7,15 @@ use std::cell::{Cell, RefCell};
 // consider removing cell
 #[derive(Debug, Default)]
 pub struct CondvarCell<T: Copy> {
-    pub mx: Mutex<Cell<T>>,
-    pub cv: Condvar,
+    pub value: Mutex<Cell<T>>,
+    pub cond: Condvar,
 }
 
 impl<T: Copy> CondvarCell<T> {
     pub fn new(init: T) -> CondvarCell<T> {
         CondvarCell {
-            mx: Mutex::new(Cell::new(init)),
-            cv: Condvar::new(),
+            value: Mutex::new(Cell::new(init)),
+            cond: Condvar::new(),
         }
     }
 }
@@ -189,7 +189,7 @@ pub enum ReadRequest {
 #[derive(Debug)]
 pub struct InPort {
     pub edge: Option<OutEdge>,
-    pub read_begin: CondvarCell<bool>,
+    pub data_wait: CondvarCell<bool>,
     pub data: Mutex<RefCell<Vec<u8>>>,
 }
 
@@ -203,12 +203,14 @@ impl InPort {
     fn new(edge: Option<OutEdge>) -> InPort {
         InPort {
             edge: edge,
-            read_begin: CondvarCell::new(false),
+            data_wait: CondvarCell::new(false),
             data: Mutex::new(RefCell::new(Vec::new())),
         }
     }
     /**
      * Construct a void port. Void ports are not connected.
+     *
+     * todo kill me
      */
     fn void() -> InPort {
         InPort::new(None)
@@ -218,16 +220,30 @@ impl InPort {
 /**
  * Has a vector of Edges that depend on this port.
  */
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct OutPort {
     pub edge: Option<InEdge>,
+    pub data_drop_signal: Arc<CondvarCell<bool>>,
 }
 
 impl OutPort {
+    fn new(edge: Option<InEdge>) -> OutPort {
+        OutPort {
+            edge: edge,
+            data_drop_signal: Arc::new(CondvarCell::new(false)),
+        }
+    }
     /**
      * Construct a void port. Void ports are not connected.
+     * todo kill me
      */
     fn void() -> OutPort {
-        OutPort { edge: None }
+        OutPort::new(None)
+    }
+}
+
+impl Clone for OutPort {
+    fn clone(&self) -> Self {
+        OutPort::new(self.edge)
     }
 }

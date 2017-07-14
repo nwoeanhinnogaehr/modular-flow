@@ -17,30 +17,32 @@ pub struct NodeContext {
 
 pub struct Data<'a, T: 'a> {
     data: Vec<T>,
+    // as a marker that data will eventually be made a slice
     phantom: PhantomData<&'a T>,
+
+    // to inform the writer that this has been dropped
+    drop_sig: Arc<CondvarCell<bool>>,
 }
 
 impl<'a, T: 'a> Data<'a, T> {
-    pub fn new(data: Vec<T>) -> Data<'a, T> {
+    pub fn new(data: Vec<T>, drop_sig: Arc<CondvarCell<bool>>) -> Data<'a, T> {
         Data {
             data,
             phantom: Default::default(),
+            drop_sig,
         }
     }
 }
 
-pub struct MutData<'a, T: 'a> {
-    data: Vec<T>,
-    phantom: PhantomData<&'a T>,
-}
-
-impl<'a, T> Deref for Data<'a, T> {
-    type Target = [T];
-    fn deref(&self) -> &Self::Target {
-        &self.data
+impl<'a, T: 'a> Drop for Data<'a, T> {
+    fn drop(&mut self) {
+        let mut lock = self.drop_sig.value.lock().unwrap();
+        lock.set(true);
+        self.drop_sig.cond.notify_one();
     }
 }
-impl<'a, T> Deref for MutData<'a, T> {
+
+impl<'a, T: 'a> Deref for Data<'a, T> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
         &self.data
@@ -48,28 +50,17 @@ impl<'a, T> Deref for MutData<'a, T> {
 }
 
 impl NodeContext {
-    /// Async, may return empty data
-    pub fn read_async<T: Copy>(&self, port: InPortID) -> Data<T> {
-        self.read(port, ReadRequest::Async).wait()
-    }
-    /// Returned data is either empty or of size `n`
-    pub fn read_n_async<T: Copy>(&self, port: InPortID, n: usize) -> Data<T> {
-        self.read(port, ReadRequest::AsyncN(n)).wait()
-    }
     /// Block until at least one byte is available
     pub fn read_any<T: Copy>(&self, port: InPortID) -> Data<T> {
-        self.read(port, ReadRequest::Any).wait()
+        self.read(port, ReadRequest::Any)
     }
     pub fn read_n<T: Copy>(&self, port: InPortID, n: usize) -> Data<T> {
-        self.read(port, ReadRequest::N(n)).wait()
+        self.read(port, ReadRequest::N(n))
     }
-    /*pub fn read_into<T: Clone>(&self, port: InPortID, dest: MutData<T>) {
-        self.read(port, ReadRequest::Into(dest)).wait();
-    }*/
-    fn read<'a, T: Copy>(&'a self, port: InPortID, req: ReadRequest) -> FutureRead<'a, T> {
-        self.sched.queue_read(self.id, port, req)
+    fn read<'a, T: Copy>(&'a self, port: InPortID, req: ReadRequest) -> Data<'a, T> {
+        self.sched.read(self.id, port, req)
     }
-    pub fn write<T: Copy>(&self, port: OutPortID, src: Data<T>) {
+    pub fn write<T: Copy>(&self, port: OutPortID, src: &[T]) {
         self.sched.write(self.id, port, src);
     }
 }
@@ -77,16 +68,6 @@ impl NodeContext {
 impl Drop for NodeContext {
     fn drop(&mut self) {
         self.sched.graph.detach_thread(self.id).unwrap();
-    }
-}
-
-struct FutureRead<'a, T: 'a> {
-    data: Data<'a, T>,
-}
-impl<'a, T> FutureRead<'a, T> {
-    fn wait(self) -> Data<'a, T> {
-        // TODO wait until signal that data is complete
-        self.data
     }
 }
 
@@ -125,7 +106,7 @@ impl Scheduler {
     fn new(graph: Graph) -> Scheduler {
         Scheduler { graph }
     }
-    fn write<'a, T>(&self, node: NodeID, port: OutPortID, data: Data<T>) {
+    fn write<'a, T>(&self, node: NodeID, port: OutPortID, data: &[T]) {
         let data_bytes: &[u8] = unsafe {
             slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() * mem::size_of::<T>())
         };
@@ -148,33 +129,31 @@ impl Scheduler {
             data.borrow_mut().extend(data_bytes);
         }
 
-        // TODO
-        // signal that data is ready
-        // with a condition variable?
-        // with a channel?
+        { // signal that data is ready
+            let mut lock = in_port.data_wait.value.lock().unwrap();
+            lock.set(true);
+            in_port.data_wait.cond.notify_one();
+        }
 
         // TODO wait for pointers to be grabbed: no longer waiting
+        // is this necessary???
 
-        { // wait for next read to begin
-            let mut lock = in_port.read_begin.mx.lock().unwrap();
+        { // wait for the Data object to be dropped
+            let mut lock = out_port.data_drop_signal.value.lock().unwrap();
             while !lock.get() {
-                lock = in_port.read_begin.cv.wait(lock).unwrap();
+                lock = out_port.data_drop_signal.cond.wait(lock).unwrap();
             }
             lock.set(false);
         }
 
-        // TODO destroy data
-
-        // but make sure not to let multiple writes happen before a read (maybe)
-        // there's a problem here: a writer going much faster than the corresponsing reader
-        // may fill up the memory. but if we block, it may lead to deadlock or non-rt processing.
+        // TODO safe to destroy data here
     }
-    fn queue_read<'a, T: Copy>(
+    fn read<'a, T: Copy>(
         &'a self,
         node: NodeID,
         port: InPortID,
         req: ReadRequest,
-    ) -> FutureRead<'a, T> {
+    ) -> Data<'a, T> {
         let in_node = self.graph.node(node);
         let in_port = in_node.in_port(port);
         match in_port.edge {
@@ -184,24 +163,27 @@ impl Scheduler {
                 if out_node.attached {
                     let out_port = out_node.out_port(in_edge.port);
 
-                    { // signal begin of read
-                        let mut lock = in_port.read_begin.mx.lock().unwrap();
-                        lock.set(true);
-                        in_port.read_begin.cv.notify_one();
-                    }
-
                     // TODO check how much data is available
                     let avail_bytes = {
                         let data = in_port.data.lock().unwrap();
-                        let len = data.borrow().len();
+                        let len = data.borrow().len(); // a weird quirk of borrowck
                         len
                     };
+
+                    let avail_T = avail_bytes / mem::size_of::<T>();
 
                     // TODO if enough, continue
 
                     // TODO signal that we are waiting for data
 
                     // TODO wait for data
+                    {
+                        let mut lock = in_port.data_wait.value.lock().unwrap();
+                        while !lock.get() {
+                            lock = in_port.data_wait.cond.wait(lock).unwrap();
+                        }
+                        lock.set(false); // no longer waiting
+                    }
 
                     let out_data = {
                         let data_bytes = in_port.data.lock().unwrap();
@@ -215,16 +197,7 @@ impl Scheduler {
 
                     // TODO signal that we are no longer waiting for data
 
-                    FutureRead {
-                        data: Data {
-                            data: out_data,
-                            phantom: PhantomData
-                        }
-                    }
-                    // check how much data is available
-                    // if enough, take it
-                    // else, signal how much we want then sleep
-                    // once we wake up, take it
+                    Data::new(out_data, out_port.data_drop_signal.clone())
                 } else {
                     panic!("endpoint not attached");
                 }
