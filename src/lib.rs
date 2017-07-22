@@ -62,10 +62,10 @@ mod tests {
         let source = g.add_node(0, 1);
         let internal = g.add_node(1, 1);
         let sink = g.add_node(1, 0);
-        g.connect(source, OutPortID(0), sink, InPortID(0))
+        g.connect(source, OutPortID(0), internal, InPortID(0))
             .unwrap();
-        //g.connect(internal, OutPortID(0), sink, InPortID(0))
-            //.unwrap();
+        g.connect(internal, OutPortID(0), sink, InPortID(0))
+            .unwrap();
         let s = Supervisor::new(g);
         let src_ctx = s.node_ctx(source).unwrap();
         thread::spawn(move || loop {
@@ -73,18 +73,18 @@ mod tests {
             src_ctx.write(OutPortID(0), &data);
             thread::yield_now();
         });
-        /*let int_ctx = s.node_ctx(internal).unwrap();
+        let int_ctx = s.node_ctx(internal).unwrap();
         thread::spawn(move || loop {
             let data = int_ctx.read_any::<u8>(InPortID(0));
             println!("int {:?}", &*data);
-            int_ctx.write(OutPortID(0), data);
+            int_ctx.write(OutPortID(0), &*data);
             thread::yield_now();
-        });*/
+        });
         let snk_ctx = s.node_ctx(sink).unwrap();
         thread::spawn(move || {
             loop {
                 let data = snk_ctx.read_any::<u8>(InPortID(0));
-                //println!("sink {:?}", &*data);
+                println!("sink {:?}", &*data);
                 thread::yield_now();
             }
         });

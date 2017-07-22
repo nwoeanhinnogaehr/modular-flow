@@ -147,6 +147,10 @@ impl Scheduler {
         }
 
         // TODO safe to destroy data here
+        {
+            let data = in_port.data.lock().unwrap();
+            data.borrow_mut().clear();
+        }
     }
     fn read<'a, T: Copy>(
         &'a self,
@@ -191,7 +195,6 @@ impl Scheduler {
                         let data: Vec<T> = unsafe {
                             slice::from_raw_parts(mem::transmute(data_bytes.as_ptr()), data_bytes.len() / mem::size_of::<T>()).iter().cloned().collect()
                         };
-                        data_bytes.clear();
                         data
                     };
 
