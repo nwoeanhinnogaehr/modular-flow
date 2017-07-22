@@ -1,9 +1,7 @@
 use super::graph::*;
 use std::sync::Arc;
 use std::mem;
-use std::ptr;
 use std::slice;
-use std::cmp::{min, max};
 use std::marker::PhantomData;
 use std::ops::Deref;
 
@@ -36,7 +34,7 @@ impl<'a, T: 'a> Data<'a, T> {
 
 impl<'a, T: 'a> Drop for Data<'a, T> {
     fn drop(&mut self) {
-        let mut lock = self.drop_sig.value.lock().unwrap();
+        let lock = self.drop_sig.value.lock().unwrap();
         lock.set(true);
         self.drop_sig.cond.notify_one();
     }
@@ -130,7 +128,7 @@ impl Scheduler {
         }
 
         { // signal that data is ready
-            let mut lock = in_port.data_wait.value.lock().unwrap();
+            let lock = in_port.data_wait.value.lock().unwrap();
             lock.set(true);
             in_port.data_wait.cond.notify_one();
         }

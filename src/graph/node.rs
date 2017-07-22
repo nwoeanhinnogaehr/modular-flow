@@ -1,4 +1,4 @@
-use std::sync::{Barrier, Mutex, MutexGuard, Condvar, Arc};
+use std::sync::{Mutex, Condvar, Arc};
 use std::cell::{Cell, RefCell};
 
 // TODO Put this elsewhere
@@ -132,6 +132,9 @@ impl Node {
         } else {
             Err(())
         }
+    }
+    pub fn id(&self) -> NodeID {
+        self.id
     }
 }
 

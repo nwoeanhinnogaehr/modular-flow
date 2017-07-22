@@ -71,22 +71,17 @@ mod tests {
         thread::spawn(move || loop {
             let data: Vec<u8> = vec![1, 2, 3, 4, 5];
             src_ctx.write(OutPortID(0), &data);
-            thread::yield_now();
         });
         let int_ctx = s.node_ctx(internal).unwrap();
         thread::spawn(move || loop {
             let data = int_ctx.read_any::<u8>(InPortID(0));
             println!("int {:?}", &*data);
             int_ctx.write(OutPortID(0), &*data);
-            thread::yield_now();
         });
         let snk_ctx = s.node_ctx(sink).unwrap();
-        thread::spawn(move || {
-            loop {
-                let data = snk_ctx.read_any::<u8>(InPortID(0));
-                println!("sink {:?}", &*data);
-                thread::yield_now();
-            }
+        thread::spawn(move || loop {
+            let data = snk_ctx.read_any::<u8>(InPortID(0));
+            println!("sink {:?}", &*data);
         });
         s.run();
     }
