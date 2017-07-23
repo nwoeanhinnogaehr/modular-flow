@@ -1,6 +1,9 @@
 use std::sync::{Mutex, Condvar, Arc};
 use std::cell::{Cell, RefCell};
 
+
+// TODO deal with variadic mess
+
 // TODO Put this elsewhere
 // clean it up
 // get rid of copy constraint
@@ -178,7 +181,7 @@ impl OutEdge {
     }
 }
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum ReadRequest {
     Async,
     AsyncN(usize),
@@ -192,6 +195,7 @@ pub enum ReadRequest {
 #[derive(Debug)]
 pub struct InPort {
     pub edge: Option<OutEdge>,
+    pub req: CondvarCell<Option<ReadRequest>>,
     pub data_wait: CondvarCell<bool>,
     pub data: Mutex<RefCell<Vec<u8>>>,
 }
@@ -206,6 +210,7 @@ impl InPort {
     fn new(edge: Option<OutEdge>) -> InPort {
         InPort {
             edge: edge,
+            req: CondvarCell::new(None),
             data_wait: CondvarCell::new(false),
             data: Mutex::new(RefCell::new(Vec::new())),
         }

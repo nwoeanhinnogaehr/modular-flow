@@ -80,7 +80,7 @@ mod tests {
         });
         let snk_ctx = s.node_ctx(sink).unwrap();
         thread::spawn(move || loop {
-            let data = snk_ctx.read_any::<u8>(InPortID(0));
+            let data = snk_ctx.read_n::<u8>(InPortID(0), 4);
             println!("sink {:?}", &*data);
         });
         s.run();
