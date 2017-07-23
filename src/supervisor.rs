@@ -101,10 +101,6 @@ pub struct Scheduler {
     graph: Graph,
 }
 
-/// TODO RENAME ME
-fn max_avail<T>(data: &[u8]) -> usize {
-    data.len() / mem::size_of::<T>()
-}
 
 impl Scheduler {
     fn new(graph: Graph) -> Scheduler {
@@ -123,65 +119,59 @@ impl Scheduler {
         let in_port: &InPort = in_node.in_port(in_edge.port);
 
 
+        // append data to buffer and get number of elements available
 
-        // "setup pointers"
-        // or if it isn't waiting, copy data so it can go ahead on it's own
-        let avail_t = {
+        // TODO while there is enough data for the reader to use
+        // synchronize data exchange with reader
+
+        {
             let data = in_port.data.lock().unwrap();
-            data.borrow_mut().extend(data_bytes);
-            let n = max_avail::<T>(&*data.borrow());
-            n
-        };
+            let mut brw = data.borrow_mut();
+            brw.extend(data_bytes);
+        }
 
-        //TODO
-        // determine how much data the in port is waiting for (if any)
-        // i.e. check current readrequest
-        {
-            let mut req_lock = in_port.req.value.lock().unwrap();
-            loop {
-                match req_lock.get() {
-                    Some(req) => {
-                        use super::graph::ReadRequest::*;
-                        match req {
-                            Any | Async => { },
-                            N(n) | AsyncN(n) => {
-                                if n > avail_t {
-                                    return;
-                                }
-                            },
-                        }
-                        break;
-                    },
-                    None => {
-                    },
+        loop {
+            let avail = {
+                let data = in_port.data.lock().unwrap();
+                let brw = data.borrow();
+                brw.len()
+            };
+
+            // check ReaderState
+            {
+                let mut lock = in_port.state.value.lock().unwrap();
+                loop {
+                    match lock.get() {
+                        Some(ReaderState::Hungry(n)) => {
+                            if avail >= n {
+                                break;
+                            } else {
+                                return; // cannot fulfill via this write call
+                            }
+                        },
+                        Some(ReaderState::Full) => {
+                            break;
+                        },
+                        None => { }
+                    }
+                    lock = in_port.state.cond.wait(lock).unwrap();
                 }
-                req_lock = in_port.req.cond.wait(req_lock).unwrap();
+                lock.set(None);
             }
-        }
 
-        { // signal that data is ready
-            let lock = in_port.data_wait.value.lock().unwrap();
-            lock.set(true);
-            in_port.data_wait.cond.notify_one();
-        }
-
-        // TODO wait for pointers to be grabbed: no longer waiting
-        // is this necessary???
-
-        { // wait for the Data object to be dropped
-            let mut lock = out_port.data_drop_signal.value.lock().unwrap();
-            while !lock.get() {
-                lock = out_port.data_drop_signal.cond.wait(lock).unwrap();
+            { // signal that data is ready
+                let lock = in_port.data_wait.value.lock().unwrap();
+                lock.set(true);
+                in_port.data_wait.cond.notify_one();
             }
-            lock.set(false);
-        }
 
-        // TODO safe to destroy data here
-        {
-            // destroy data
-            //let data = in_port.data.lock().unwrap();
-            //data.borrow_mut().clear();
-
+            { // wait for the Data object to be dropped
+                let mut lock = out_port.data_drop_signal.value.lock().unwrap();
+                while !lock.get() {
+                    lock = out_port.data_drop_signal.cond.wait(lock).unwrap();
+                }
+                lock.set(false);
+            }
         }
     }
     fn read<'a, T: Copy>(
@@ -208,31 +198,30 @@ impl Scheduler {
 
                     let avail_t = avail_bytes / mem::size_of::<T>();
 
+                    use super::graph::ReaderState::*;
                     use super::graph::ReadRequest::*;
-                    let need_data = match req {
-                        Any => avail_t == 0,
-                        Async => false,
-                        N(n) => avail_t < n,
-                        AsyncN(_) => false,
+                    let state = match req {
+                        Any => if avail_t == 0 { Hungry(mem::size_of::<T>()) } else { Full },
+                        Async => Full,
+                        N(n) => if avail_t < n { Hungry(n * mem::size_of::<T>()) } else { Full },
+                        AsyncN(_) => Full,
                     };
 
                     // TODO if enough, continue
 
                     // TODO signal that we are waiting for data
                     {
-                        let port_req = in_port.req.value.lock().unwrap();
-                        assert!(port_req.get().is_none());
-                        port_req.set(Some(req));
-                        in_port.req.cond.notify_one();
+                        let lock = in_port.state.value.lock().unwrap();
+                        assert!(lock.get().is_none());
+                        lock.set(Some(state));
+                        in_port.state.cond.notify_one();
                     }
 
                     // TODO wait for data
                     {
                         let mut lock = in_port.data_wait.value.lock().unwrap();
-                        if need_data {
-                            while !lock.get() {
-                                lock = in_port.data_wait.cond.wait(lock).unwrap();
-                            }
+                        while !lock.get() {
+                            lock = in_port.data_wait.cond.wait(lock).unwrap();
                         }
                         lock.set(false); // no longer waiting
                     }
@@ -240,7 +229,7 @@ impl Scheduler {
                     let out_data = {
                         let data_bytes = in_port.data.lock().unwrap();
                         let mut data_bytes = data_bytes.borrow_mut();
-                        let avail_t = max_avail::<T>(&*data_bytes);
+                        let avail_t = data_bytes.len() / mem::size_of::<T>();
                         let take_n = match req {
                             Any => avail_t,
                             Async => avail_t,
@@ -264,14 +253,12 @@ impl Scheduler {
                         data
                     };
 
-                    // TODO signal that we are no longer waiting for data
-
-                    {
-                        let port_req = in_port.req.value.lock().unwrap();
-                        assert!(port_req.get().is_some());
-                        port_req.set(None);
-                        in_port.req.cond.notify_one();
-                    }
+                    /*{
+                        let lock = in_port.state.value.lock().unwrap();
+                        assert!(lock.get().is_some());
+                        lock.set(None);
+                        in_port.state.cond.notify_one();
+                    }*/
 
                     Data::new(out_data, out_port.data_drop_signal.clone())
                 } else {

@@ -74,13 +74,14 @@ mod tests {
         });
         let int_ctx = s.node_ctx(internal).unwrap();
         thread::spawn(move || loop {
-            let data = int_ctx.read_any::<u8>(InPortID(0));
+            let data = int_ctx.read_n::<u8>(InPortID(0), 1);
             println!("int {:?}", &*data);
+            int_ctx.write(OutPortID(0), &*data);
             int_ctx.write(OutPortID(0), &*data);
         });
         let snk_ctx = s.node_ctx(sink).unwrap();
         thread::spawn(move || loop {
-            let data = snk_ctx.read_n::<u8>(InPortID(0), 4);
+            let data = snk_ctx.read_n::<u8>(InPortID(0), 3);
             println!("sink {:?}", &*data);
         });
         s.run();

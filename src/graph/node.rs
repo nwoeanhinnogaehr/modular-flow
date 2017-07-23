@@ -189,6 +189,12 @@ pub enum ReadRequest {
     N(usize),
 }
 
+#[derive(Copy, Clone, Debug)]
+pub enum ReaderState {
+    Hungry(usize),
+    Full
+}
+
 /**
  * Optionally holds the edge that this port depends on.
  */
@@ -197,6 +203,7 @@ pub struct InPort {
     pub edge: Option<OutEdge>,
     pub req: CondvarCell<Option<ReadRequest>>,
     pub data_wait: CondvarCell<bool>,
+    pub state: CondvarCell<Option<ReaderState>>,
     pub data: Mutex<RefCell<Vec<u8>>>,
 }
 
@@ -212,6 +219,7 @@ impl InPort {
             edge: edge,
             req: CondvarCell::new(None),
             data_wait: CondvarCell::new(false),
+            state: CondvarCell::new(None),
             data: Mutex::new(RefCell::new(Vec::new())),
         }
     }
