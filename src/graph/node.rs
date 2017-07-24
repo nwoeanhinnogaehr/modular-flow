@@ -192,7 +192,7 @@ pub enum ReadRequest {
 #[derive(Copy, Clone, Debug)]
 pub enum ReaderState {
     Hungry(usize),
-    Full
+    Full,
 }
 
 /**
@@ -201,7 +201,6 @@ pub enum ReaderState {
 #[derive(Debug)]
 pub struct InPort {
     pub edge: Option<OutEdge>,
-    pub req: CondvarCell<Option<ReadRequest>>,
     pub data_wait: CondvarCell<bool>,
     pub state: CondvarCell<Option<ReaderState>>,
     pub data: Mutex<RefCell<Vec<u8>>>,
@@ -217,7 +216,6 @@ impl InPort {
     fn new(edge: Option<OutEdge>) -> InPort {
         InPort {
             edge: edge,
-            req: CondvarCell::new(None),
             data_wait: CondvarCell::new(false),
             state: CondvarCell::new(None),
             data: Mutex::new(RefCell::new(Vec::new())),

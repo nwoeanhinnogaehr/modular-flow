@@ -14,6 +14,7 @@ pub struct NodeContext {
     sched: Arc<Scheduler>,
 }
 
+// TODO T must be copy!
 pub struct Data<'a, T: 'a> {
     data: Vec<T>,
     // as a marker that data will eventually be made a slice
@@ -106,9 +107,13 @@ impl Scheduler {
     fn new(graph: Graph) -> Scheduler {
         Scheduler { graph }
     }
+    // TODO T must be copy
     fn write<'a, T>(&self, node: NodeID, port: OutPortID, data: &[T]) {
         let data_bytes: &[u8] = unsafe {
-            slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() * mem::size_of::<T>())
+            slice::from_raw_parts(
+                mem::transmute(data.as_ptr()),
+                data.len() * mem::size_of::<T>(),
+            )
         };
 
         let out_node = self.graph.node(node);
@@ -148,24 +153,26 @@ impl Scheduler {
                             } else {
                                 return; // cannot fulfill via this write call
                             }
-                        },
+                        }
                         Some(ReaderState::Full) => {
                             break;
-                        },
-                        None => { }
+                        }
+                        None => {}
                     }
                     lock = in_port.state.cond.wait(lock).unwrap();
                 }
                 lock.set(None);
             }
 
-            { // signal that data is ready
+            {
+                // signal that data is ready
                 let lock = in_port.data_wait.value.lock().unwrap();
                 lock.set(true);
                 in_port.data_wait.cond.notify_one();
             }
 
-            { // wait for the Data object to be dropped
+            {
+                // wait for the Data object to be dropped
                 let mut lock = out_port.data_drop_signal.value.lock().unwrap();
                 while !lock.get() {
                     lock = out_port.data_drop_signal.cond.wait(lock).unwrap();
@@ -174,12 +181,7 @@ impl Scheduler {
             }
         }
     }
-    fn read<'a, T: Copy>(
-        &'a self,
-        node: NodeID,
-        port: InPortID,
-        req: ReadRequest,
-    ) -> Data<'a, T> {
+    fn read<'a, T: Copy>(&'a self, node: NodeID, port: InPortID, req: ReadRequest) -> Data<'a, T> {
         let in_node = self.graph.node(node);
         let in_port = in_node.in_port(port);
         match in_port.edge {
@@ -201,9 +203,21 @@ impl Scheduler {
                     use super::graph::ReaderState::*;
                     use super::graph::ReadRequest::*;
                     let state = match req {
-                        Any => if avail_t == 0 { Hungry(mem::size_of::<T>()) } else { Full },
+                        Any => {
+                            if avail_t == 0 {
+                                Hungry(mem::size_of::<T>())
+                            } else {
+                                Full
+                            }
+                        }
                         Async => Full,
-                        N(n) => if avail_t < n { Hungry(n * mem::size_of::<T>()) } else { Full },
+                        N(n) => {
+                            if avail_t < n {
+                                Hungry(n * mem::size_of::<T>())
+                            } else {
+                                Full
+                            }
+                        }
                         AsyncN(_) => Full,
                     };
 
@@ -247,7 +261,10 @@ impl Scheduler {
                         };
 
                         let data: Vec<T> = unsafe {
-                            slice::from_raw_parts(mem::transmute(data_bytes.as_ptr()), take_n).iter().cloned().collect()
+                            slice::from_raw_parts(mem::transmute(data_bytes.as_ptr()), take_n)
+                                .iter()
+                                .cloned()
+                                .collect()
                         };
                         data_bytes.drain(..(take_n * mem::size_of::<T>()));
                         data
@@ -264,7 +281,7 @@ impl Scheduler {
                 } else {
                     panic!("endpoint not attached");
                 }
-            },
+            }
             None => {
                 panic!("disconnected");
                 // block until connected?
