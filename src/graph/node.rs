@@ -192,7 +192,6 @@ pub enum ReadRequest {
 #[derive(Copy, Clone, Debug)]
 pub enum ReaderState {
     Hungry(usize),
-    Full,
 }
 
 /**

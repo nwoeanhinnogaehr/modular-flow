@@ -36,9 +36,9 @@ impl<'a, T: 'a> Data<'a, T> {
 
 impl<'a, T: 'a> Drop for Data<'a, T> {
     fn drop(&mut self) {
-        let lock = self.drop_sig.value.lock().unwrap();
-        lock.set(true);
-        self.drop_sig.cond.notify_one();
+        //let lock = self.drop_sig.value.lock().unwrap();
+        //lock.set(true);
+        //self.drop_sig.cond.notify_one();
     }
 }
 
@@ -56,6 +56,12 @@ impl NodeContext {
     }
     pub fn read_n<T: Copy>(&self, port: InPortID, n: usize) -> Data<T> {
         self.read(port, ReadRequest::N(n))
+    }
+    pub fn read_async<T: Copy>(&self, port: InPortID) -> Data<T> {
+        self.read(port, ReadRequest::Async)
+    }
+    pub fn read_async_n<T: Copy>(&self, port: InPortID, n: usize) -> Data<T> {
+        self.read(port, ReadRequest::AsyncN(n))
     }
     fn read<'a, T: Copy>(&'a self, port: InPortID, req: ReadRequest) -> Data<'a, T> {
         self.sched.read(self.id, port, req)
@@ -107,6 +113,7 @@ impl Scheduler {
     fn new(graph: Graph) -> Scheduler {
         Scheduler { graph }
     }
+    // TODO clean up TODOs
     // TODO T must be copy
     fn write<'a, T>(&self, node: NodeID, port: OutPortID, data: &[T]) {
         let data_bytes: &[u8] = unsafe {
@@ -132,7 +139,7 @@ impl Scheduler {
         {
             let data = in_port.data.lock().unwrap();
             let mut brw = data.borrow_mut();
-            brw.extend(data_bytes);
+            brw.extend(data_bytes); // TODO don't let buffer grow without bound
         }
 
         loop {
@@ -153,9 +160,6 @@ impl Scheduler {
                             } else {
                                 return; // cannot fulfill via this write call
                             }
-                        }
-                        Some(ReaderState::Full) => {
-                            break;
                         }
                         None => {}
                     }
@@ -207,18 +211,18 @@ impl Scheduler {
                             if avail_t == 0 {
                                 Hungry(mem::size_of::<T>())
                             } else {
-                                Full
+                                Hungry(0)
                             }
                         }
-                        Async => Full,
+                        Async => panic!(),
                         N(n) => {
                             if avail_t < n {
                                 Hungry(n * mem::size_of::<T>())
                             } else {
-                                Full
+                                Hungry(0)
                             }
                         }
-                        AsyncN(_) => Full,
+                        AsyncN(_) => panic!(),
                     };
 
                     // TODO if enough, continue
@@ -270,12 +274,11 @@ impl Scheduler {
                         data
                     };
 
-                    /*{
-                        let lock = in_port.state.value.lock().unwrap();
-                        assert!(lock.get().is_some());
-                        lock.set(None);
-                        in_port.state.cond.notify_one();
-                    }*/
+                    {
+                        let lock = out_port.data_drop_signal.value.lock().unwrap();
+                        lock.set(true);
+                        out_port.data_drop_signal.cond.notify_one();
+                    }
 
                     Data::new(out_data, out_port.data_drop_signal.clone())
                 } else {
