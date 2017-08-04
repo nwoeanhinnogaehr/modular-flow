@@ -5,6 +5,7 @@ use std::slice;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::thread;
+use std::sync::atomic::Ordering;
 
 /**
  * Holds the context needed for a node thread to read, write, and access the graph.
@@ -142,7 +143,9 @@ impl Scheduler {
             brw.extend(data_bytes); // TODO don't let buffer grow without bound
         }
 
-        loop {
+        let mut done = false;
+        while !done {
+            in_port.writer_waiting.store(true, Ordering::SeqCst);
             let avail = {
                 let data = in_port.data.lock().unwrap();
                 let brw = data.borrow();
@@ -158,8 +161,22 @@ impl Scheduler {
                             if avail >= n {
                                 break;
                             } else {
+                                in_port.writer_waiting.store(false, Ordering::SeqCst);
+
+            {
+                // wait for the Data object to be dropped
+                let mut lock = out_port.data_drop_signal.value.lock().unwrap();
+                while !lock.get() {
+                    lock = out_port.data_drop_signal.cond.wait(lock).unwrap();
+                }
+                lock.set(false);
+            }
                                 return; // cannot fulfill via this write call
                             }
+                        }
+                        Some(ReaderState::Eating) => {
+                            done = true;
+                            break;
                         }
                         None => {}
                     }
@@ -175,6 +192,7 @@ impl Scheduler {
                 in_port.data_wait.cond.notify_one();
             }
 
+            in_port.writer_waiting.store(false, Ordering::SeqCst);
             {
                 // wait for the Data object to be dropped
                 let mut lock = out_port.data_drop_signal.value.lock().unwrap();
@@ -184,6 +202,7 @@ impl Scheduler {
                 lock.set(false);
             }
         }
+
     }
     fn read<'a, T: Copy>(&'a self, node: NodeID, port: InPortID, req: ReadRequest) -> Data<'a, T> {
         let in_node = self.graph.node(node);
@@ -214,7 +233,6 @@ impl Scheduler {
                                 Hungry(0)
                             }
                         }
-                        Async => panic!(),
                         N(n) => {
                             if avail_t < n {
                                 Hungry(n * mem::size_of::<T>())
@@ -222,7 +240,20 @@ impl Scheduler {
                                 Hungry(0)
                             }
                         }
-                        AsyncN(_) => panic!(),
+                        Async | AsyncN(_) => {
+                            if in_port.writer_waiting.load(Ordering::SeqCst) {
+                                println!("waiting");
+                                Eating
+                            } else {
+
+                    {
+                        let lock = out_port.data_drop_signal.value.lock().unwrap();
+                        lock.set(true);
+                        out_port.data_drop_signal.cond.notify_one();
+                    }
+                                return Data::new(Vec::new(), out_port.data_drop_signal.clone());
+                            }
+                        }
                     };
 
                     // TODO if enough, continue

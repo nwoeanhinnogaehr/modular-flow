@@ -1,5 +1,6 @@
 use std::sync::{Mutex, Condvar, Arc};
 use std::cell::{Cell, RefCell};
+use std::sync::atomic::AtomicBool;
 
 
 // TODO deal with variadic mess
@@ -192,6 +193,7 @@ pub enum ReadRequest {
 #[derive(Copy, Clone, Debug)]
 pub enum ReaderState {
     Hungry(usize),
+    Eating
 }
 
 /**
@@ -203,6 +205,7 @@ pub struct InPort {
     pub data_wait: CondvarCell<bool>,
     pub state: CondvarCell<Option<ReaderState>>,
     pub data: Mutex<RefCell<Vec<u8>>>,
+    pub writer_waiting: AtomicBool,
 }
 
 impl Clone for InPort {
@@ -218,6 +221,7 @@ impl InPort {
             data_wait: CondvarCell::new(false),
             state: CondvarCell::new(None),
             data: Mutex::new(RefCell::new(Vec::new())),
+            writer_waiting: AtomicBool::new(false),
         }
     }
     /**

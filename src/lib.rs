@@ -104,9 +104,9 @@ mod tests {
         });
         let snk_ctx = s.node_ctx(sink).unwrap();
         thread::spawn(move || loop {
-            let data = snk_ctx.read_n::<u8>(InPortID(0), 5);
+            let data = snk_ctx.read_async::<u8>(InPortID(0));
             println!("sink.0 {:?}", &*data);
-            let data = snk_ctx.read_async_n::<u8>(InPortID(1), 11);
+            let data = snk_ctx.read_async_n::<u8>(InPortID(1), 111);
             println!("sink.1 {:?}", &*data);
         });
         s.run();
