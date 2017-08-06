@@ -1,6 +1,6 @@
 use std::sync::{Mutex, Condvar, Arc};
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 
 // TODO deal with variadic mess
@@ -43,8 +43,7 @@ pub struct Node {
     id: NodeID,
     in_ports: Vec<InPort>,
     out_ports: Vec<OutPort>,
-    pub attached: bool,
-    variadic: bool,
+    attached: AtomicBool,
 }
 
 impl Node {
@@ -57,19 +56,9 @@ impl Node {
     pub(crate) fn new(id: NodeID, num_in: usize, num_out: usize) -> Node {
         Node {
             id,
-            in_ports: vec![InPort::void(); num_in],
-            out_ports: vec![OutPort::void(); num_out],
-            attached: false,
-            variadic: false,
-        }
-    }
-    pub(crate) fn new_variadic(id: NodeID) -> Node {
-        Node {
-            id,
-            in_ports: Vec::new(),
-            out_ports: Vec::new(),
-            attached: false,
-            variadic: true,
+            in_ports: vec![InPort::default(); num_in],
+            out_ports: vec![OutPort::default(); num_out],
+            attached: AtomicBool::new(false),
         }
     }
     pub fn has_inputs(&self) -> bool {
@@ -91,54 +80,36 @@ impl Node {
             NodeType::Sink
         }
     }
+    pub fn in_ports(&self) -> &[InPort] {
+        &self.in_ports
+    }
+    pub fn out_ports(&self) -> &[OutPort] {
+        &self.out_ports
+    }
     pub fn in_port(&self, port_id: InPortID) -> &InPort {
         &self.in_ports[port_id.0]
     }
     pub fn out_port(&self, port_id: OutPortID) -> &OutPort {
         &self.out_ports[port_id.0]
     }
-    pub fn in_port_mut(&mut self, port_id: InPortID) -> &mut InPort {
-        &mut self.in_ports[port_id.0]
-    }
-    pub fn out_port_mut(&mut self, port_id: OutPortID) -> &mut OutPort {
-        &mut self.out_ports[port_id.0]
-    }
-    pub fn push_in_port(&mut self) -> Result<usize, ()> {
-        if self.variadic {
-            self.in_ports.push(InPort::void());
-            Ok(self.in_ports.len() - 1)
-        } else {
-            Err(())
-        }
-    }
-    pub fn push_out_port(&mut self) -> Result<usize, ()> {
-        if self.variadic {
-            self.out_ports.push(OutPort::void());
-            Ok(self.out_ports.len() - 1)
-        } else {
-            Err(())
-        }
-    }
-    pub fn pop_in_port(&mut self) -> Result<usize, ()> {
-        if self.variadic {
-            self.in_ports
-                .pop()
-                .map_or(Err(()), |_| Ok(self.in_ports.len()))
-        } else {
-            Err(())
-        }
-    }
-    pub fn pop_out_port(&mut self) -> Result<usize, ()> {
-        if self.variadic {
-            self.out_ports
-                .pop()
-                .map_or(Err(()), |_| Ok(self.in_ports.len()))
-        } else {
-            Err(())
-        }
-    }
     pub fn id(&self) -> NodeID {
         self.id
+    }
+    pub fn attach_thread(&self) -> Result<(), ()> {
+        println!("attach thread {:?}", self.id());
+        if self.attached.compare_and_swap(false, true, Ordering::SeqCst) {
+            Err(())
+        } else {
+            Ok(())
+        }
+    }
+    pub fn detach_thread(&self) -> Result<(), ()> {
+        println!("detach thread {:?}", self.id());
+        if self.attached.compare_and_swap(true, false, Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(())
+        }
     }
 }
 
@@ -182,85 +153,82 @@ impl OutEdge {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum ReadRequest {
-    Async,
-    AsyncN(usize),
-    Any,
-    N(usize),
+pub trait Port {
+    type ID;
+    type Edge;
+    fn new(Option<Self::Edge>) -> Self;
+    fn edge(&self) -> Option<Self::Edge>;
+    fn set_edge(&self, edge: Option<Self::Edge>);
+    fn has_edge(&self) -> bool {
+        self.edge().is_some()
+    }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum ReaderState {
-    Hungry(usize),
-    Eating
-}
-
-/**
- * Optionally holds the edge that this port depends on.
- */
 #[derive(Debug)]
 pub struct InPort {
-    pub edge: Option<OutEdge>,
-    pub data_wait: CondvarCell<bool>,
-    pub state: CondvarCell<Option<ReaderState>>,
-    pub data: Mutex<RefCell<Vec<u8>>>,
-    pub writer_waiting: AtomicBool,
+    pub edge: Cell<Option<OutEdge>>,
+    pub lock: CondvarCell<bool>,
+    pub data: RefCell<Vec<u8>>,
+}
+
+impl Port for InPort {
+    type ID = InPortID;
+    type Edge = OutEdge;
+
+    fn new(edge: Option<OutEdge>) -> InPort {
+        InPort {
+            edge: Cell::new(edge),
+            lock: CondvarCell::new(false),
+            data: RefCell::new(Vec::new()),
+        }
+    }
+    fn edge(&self) -> Option<Self::Edge> {
+        self.edge.get()
+    }
+    fn set_edge(&self, edge: Option<Self::Edge>) {
+        self.edge.set(edge);
+    }
 }
 
 impl Clone for InPort {
     fn clone(&self) -> Self {
-        InPort::new(self.edge)
+        InPort::new(self.edge())
     }
 }
-
-impl InPort {
-    fn new(edge: Option<OutEdge>) -> InPort {
-        InPort {
-            edge: edge,
-            data_wait: CondvarCell::new(false),
-            state: CondvarCell::new(None),
-            data: Mutex::new(RefCell::new(Vec::new())),
-            writer_waiting: AtomicBool::new(false),
-        }
-    }
-    /**
-     * Construct a void port. Void ports are not connected.
-     *
-     * todo kill me
-     */
-    fn void() -> InPort {
+impl Default for InPort {
+    fn default() -> InPort {
         InPort::new(None)
     }
 }
 
-/**
- * Has a vector of Edges that depend on this port.
- */
 #[derive(Debug)]
 pub struct OutPort {
-    pub edge: Option<InEdge>,
-    pub data_drop_signal: Arc<CondvarCell<bool>>,
+    edge: Cell<Option<InEdge>>,
 }
 
-impl OutPort {
+impl Port for OutPort {
+    type ID = OutPortID;
+    type Edge = InEdge;
     fn new(edge: Option<InEdge>) -> OutPort {
         OutPort {
-            edge: edge,
-            data_drop_signal: Arc::new(CondvarCell::new(false)),
+            edge: Cell::new(edge),
         }
     }
-    /**
-     * Construct a void port. Void ports are not connected.
-     * todo kill me
-     */
-    fn void() -> OutPort {
+    fn edge(&self) -> Option<Self::Edge> {
+        self.edge.get()
+    }
+    fn set_edge(&self, edge: Option<Self::Edge>) {
+        self.edge.set(edge);
+    }
+}
+
+impl Default for OutPort {
+    fn default() -> OutPort {
         OutPort::new(None)
     }
 }
-
 impl Clone for OutPort {
     fn clone(&self) -> Self {
-        OutPort::new(self.edge)
+        OutPort::new(self.edge())
     }
 }
