@@ -1,4 +1,4 @@
-use std::sync::{Mutex, Condvar, Arc};
+use std::sync::{Arc, Condvar, Mutex};
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -10,15 +10,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // get rid of copy constraint
 // consider removing cell
 #[derive(Debug, Default)]
-pub struct CondvarCell<T: Copy> {
-    pub value: Mutex<Cell<T>>,
+pub struct CondvarCell<T> {
+    pub value: Mutex<T>,
     pub cond: Condvar,
 }
 
-impl<T: Copy> CondvarCell<T> {
+impl<T> CondvarCell<T> {
     pub fn new(init: T) -> CondvarCell<T> {
         CondvarCell {
-            value: Mutex::new(Cell::new(init)),
+            value: Mutex::new(init),
             cond: Condvar::new(),
         }
     }
@@ -97,7 +97,9 @@ impl Node {
     }
     pub fn attach_thread(&self) -> Result<(), ()> {
         println!("attach thread {:?}", self.id());
-        if self.attached.compare_and_swap(false, true, Ordering::SeqCst) {
+        if self.attached
+            .compare_and_swap(false, true, Ordering::SeqCst)
+        {
             Err(())
         } else {
             Ok(())
@@ -105,7 +107,9 @@ impl Node {
     }
     pub fn detach_thread(&self) -> Result<(), ()> {
         println!("detach thread {:?}", self.id());
-        if self.attached.compare_and_swap(true, false, Ordering::SeqCst) {
+        if self.attached
+            .compare_and_swap(true, false, Ordering::SeqCst)
+        {
             Ok(())
         } else {
             Err(())
@@ -167,8 +171,7 @@ pub trait Port {
 #[derive(Debug)]
 pub struct InPort {
     pub edge: Cell<Option<OutEdge>>,
-    pub lock: CondvarCell<bool>,
-    pub data: RefCell<Vec<u8>>,
+    pub data: Mutex<Vec<u8>>,
 }
 
 impl Port for InPort {
@@ -178,8 +181,7 @@ impl Port for InPort {
     fn new(edge: Option<OutEdge>) -> InPort {
         InPort {
             edge: Cell::new(edge),
-            lock: CondvarCell::new(false),
-            data: RefCell::new(Vec::new()),
+            data: Mutex::new(Vec::new()),
         }
     }
     fn edge(&self) -> Option<Self::Edge> {

@@ -67,5 +67,4 @@ impl Graph {
             })
             .ok_or(())
     }
-
 }

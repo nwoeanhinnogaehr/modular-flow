@@ -13,10 +13,8 @@ pub struct Data<T> {
 }
 
 impl<T> Data<T> {
-    pub fn new(data: Vec<T>) -> Data< T> {
-        Data {
-            data,
-        }
+    pub fn new(data: Vec<T>) -> Data<T> {
+        Data { data }
     }
 }
 
@@ -28,11 +26,14 @@ impl<T> Deref for Data<T> {
 }
 
 pub struct NodeLock<'a> {
-    locked: Vec<MutexGuard<'a, Cell<bool>>>,
+    locked: Vec<MutexGuard<'a, Vec<u8>>>,
 }
 
 impl<'a> NodeLock<'a> {
-    pub fn wait<F>(&self, cond: F) where F: FnMut() {
+    pub fn wait<F>(&self, cond: F)
+    where
+        F: FnMut(),
+    {
         unimplemented!();
     }
     pub fn write<T>(&self, data: Data<T>) {
@@ -59,9 +60,19 @@ impl NodeContext {
     pub fn lock<'a>(&'a self) -> NodeLock<'a> {
         let node = self.sched.graph.node(self.id);
         let mut locked = Vec::new();
-        NodeLock {
-            locked
+        for in_port in node.in_ports() {
+            let lock = in_port.data.lock().unwrap();
+            locked.push(lock);
         }
+        for out_port in node.out_ports() {
+            if let Some(edge) = out_port.edge() {
+                let dst_node = self.sched.graph.node(edge.node);
+                let in_port = dst_node.in_port(edge.port);
+                let lock = in_port.data.lock().unwrap();
+                locked.push(lock);
+            }
+        }
+        NodeLock { locked }
     }
 }
 
