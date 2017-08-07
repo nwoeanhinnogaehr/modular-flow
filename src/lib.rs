@@ -73,23 +73,24 @@ mod tests {
         let src_ctx = s.node_ctx(source).unwrap();
         thread::spawn(move || loop {
             let mut guard = src_ctx.lock();
-            guard.wait(|x| x.buffered(OutPortID(0)) == 0);
-            guard.write(OutPortID(0), Data::new(vec![1, 2, 3]));
+            guard.wait(|x| x.buffered(OutPortID(0)) < 32);
+            guard.write(OutPortID(0), &[1, 2, 3, 4, 5]);
+            thread::yield_now();
         });
         let int_ctx = s.node_ctx(internal).unwrap();
         thread::spawn(move || loop {
             let mut guard = int_ctx.lock();
-            guard.wait(|x| x.available(InPortID(0)) != 0);
-            let d = guard.read(InPortID(0));
+            guard.wait(|x| x.available(InPortID(0)) >= 32);
+            let d = guard.read_n(InPortID(0), 32);
             println!("{:?}", *d);
-            guard.wait(|x| x.buffered(OutPortID(0)) == 0);
-            guard.write(OutPortID(0), d);
+            guard.wait(|x| x.buffered(OutPortID(0)) < 7);
+            guard.write(OutPortID(0), &d);
         });
         let snk_ctx = s.node_ctx(sink).unwrap();
         thread::spawn(move || loop {
             let mut guard = snk_ctx.lock();
-            guard.wait(|x| x.available(InPortID(0)) != 0);
-            let d = guard.read(InPortID(0));
+            guard.wait(|x| x.available(InPortID(0)) >= 7);
+            let d = guard.read_n(InPortID(0), 7);
             println!("sink {:?}", *d);
         });
         s.run();

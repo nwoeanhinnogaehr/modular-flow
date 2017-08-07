@@ -47,7 +47,7 @@ impl<'a> NodeGuard<'a> {
         }
         self.guard = Some(guard);
     }
-    pub fn write(&mut self, port: OutPortID, data: Data<u8>) {
+    pub fn write(&mut self, port: OutPortID, data: &[u8]) {
         let edge = self.node.out_port(port).edge().unwrap();
         let endpoint_node = self.sched.graph.node(edge.node);
         let in_port = endpoint_node.in_port(edge.port);
@@ -65,6 +65,9 @@ impl<'a> NodeGuard<'a> {
     pub fn read_n(&mut self, port: InPortID, n: usize) -> Data<u8> {
         let in_port = self.node.in_port(port);
         let mut buffer = in_port.data.lock().unwrap();
+        if buffer.len() < n {
+            return Data::new(Vec::new());
+        }
         let out = buffer.drain(..n).collect();
         self.sched.graph.cond.notify_all();
         Data::new(out)
