@@ -44,8 +44,6 @@ pub struct Node {
     in_ports: Vec<InPort>,
     out_ports: Vec<OutPort>,
     attached: AtomicBool,
-    pub lock: Mutex<()>,
-    pub cond: Condvar,
 }
 
 impl Node {
@@ -61,8 +59,6 @@ impl Node {
             in_ports: vec![InPort::default(); num_in],
             out_ports: vec![OutPort::default(); num_out],
             attached: AtomicBool::new(false),
-            lock: Mutex::new(()),
-            cond: Condvar::new(),
         }
     }
     pub fn has_inputs(&self) -> bool {
@@ -174,7 +170,7 @@ pub trait Port {
 
 #[derive(Debug)]
 pub struct InPort {
-    edge: Cell<Option<OutEdge>>,
+    edge: Mutex<Option<OutEdge>>,
     pub data: Mutex<Vec<u8>>,
 }
 
@@ -184,15 +180,15 @@ impl Port for InPort {
 
     fn new(edge: Option<OutEdge>) -> InPort {
         InPort {
-            edge: Cell::new(edge),
+            edge: Mutex::new(edge),
             data: Mutex::new(Vec::new()),
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
-        self.edge.get()
+        *self.edge.lock().unwrap()
     }
     fn set_edge(&self, edge: Option<Self::Edge>) {
-        self.edge.set(edge);
+        *self.edge.lock().unwrap() = edge;
     }
 }
 
@@ -209,7 +205,7 @@ impl Default for InPort {
 
 #[derive(Debug)]
 pub struct OutPort {
-    edge: Cell<Option<InEdge>>,
+    edge: Mutex<Option<InEdge>>,
 }
 
 impl Port for OutPort {
@@ -217,14 +213,14 @@ impl Port for OutPort {
     type Edge = InEdge;
     fn new(edge: Option<InEdge>) -> OutPort {
         OutPort {
-            edge: Cell::new(edge),
+            edge: Mutex::new(edge),
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
-        self.edge.get()
+        *self.edge.lock().unwrap()
     }
     fn set_edge(&self, edge: Option<Self::Edge>) {
-        self.edge.set(edge);
+        *self.edge.lock().unwrap() = edge;
     }
 }
 

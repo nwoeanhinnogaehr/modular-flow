@@ -1,4 +1,4 @@
-use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Condvar, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// node
 pub mod node;
@@ -7,11 +7,17 @@ pub use self::node::*;
 
 pub struct Graph {
     nodes: Vec<Node>,
+    pub cond: Condvar,
+    pub lock: Mutex<()>,
 }
 
 impl Graph {
     pub fn new() -> Graph {
-        Graph { nodes: Vec::new() }
+        Graph {
+            nodes: Vec::new(),
+            cond: Condvar::new(),
+            lock: Mutex::new(()),
+        }
     }
     /**
      * Get a node by ID.
@@ -58,13 +64,13 @@ impl Graph {
      * Returns Err if the port is not connected.
      */
     pub fn disconnect(&self, node_id: NodeID, port_id: InPortID) -> Result<OutEdge, ()> {
-        self.node(node_id)
-            .in_port(port_id)
-            .edge()
-            .and_then(|edge| {
-                self.node(edge.node).out_port(edge.port).set_edge(None);
-                Some(edge)
-            })
-            .ok_or(())
+        let in_port = self.node(node_id).in_port(port_id);
+        if let Some(edge) = in_port.edge() {
+            in_port.set_edge(None);
+            self.node(edge.node).out_port(edge.port).set_edge(None);
+            Ok(edge)
+        } else {
+            Err(())
+        }
     }
 }
