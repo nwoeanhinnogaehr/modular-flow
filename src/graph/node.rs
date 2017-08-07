@@ -44,6 +44,8 @@ pub struct Node {
     in_ports: Vec<InPort>,
     out_ports: Vec<OutPort>,
     attached: AtomicBool,
+    pub lock: Mutex<()>,
+    pub cond: Condvar,
 }
 
 impl Node {
@@ -59,6 +61,8 @@ impl Node {
             in_ports: vec![InPort::default(); num_in],
             out_ports: vec![OutPort::default(); num_out],
             attached: AtomicBool::new(false),
+            lock: Mutex::new(()),
+            cond: Condvar::new(),
         }
     }
     pub fn has_inputs(&self) -> bool {
@@ -170,7 +174,7 @@ pub trait Port {
 
 #[derive(Debug)]
 pub struct InPort {
-    pub edge: Cell<Option<OutEdge>>,
+    edge: Cell<Option<OutEdge>>,
     pub data: Mutex<Vec<u8>>,
 }
 

@@ -1,12 +1,12 @@
 use super::graph::*;
-use std::sync::{Arc, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Condvar};
 use std::mem;
 use std::slice;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::thread;
 use std::sync::atomic::Ordering;
-use std::cell::Cell;
+use std::cell::{RefCell,Cell};
 
 pub struct Data<T> {
     data: Vec<T>,
@@ -25,24 +25,43 @@ impl<T> Deref for Data<T> {
     }
 }
 
-pub struct NodeLock<'a> {
-    locked: Vec<MutexGuard<'a, Vec<u8>>>,
+pub struct NodeGuard<'a> {
+    node: &'a Node,
+    sched: &'a Scheduler,
+    guard: Option<MutexGuard<'a, ()>>,
 }
 
-impl<'a> NodeLock<'a> {
-    pub fn wait<F>(&self, cond: F)
+impl<'a> NodeGuard<'a> {
+    fn new(sched: &'a Scheduler, node_id: NodeID) -> NodeGuard<'a> {
+        let node = sched.graph.node(node_id);
+        let guard = Some(node.lock.lock().unwrap());
+        NodeGuard {
+            node,
+            sched,
+            guard,
+        }
+    }
+    pub fn wait<F>(&mut self, mut cond: F)
     where
-        F: FnMut(),
+        F: FnMut() -> bool,
     {
+        let mut guard = self.guard.take().unwrap();
+        while !cond() {
+            guard = self.node.cond.wait(guard).unwrap();
+        }
+        self.guard = Some(guard);
+    }
+    pub fn write<T>(&mut self, port: OutPortID, data: Data<T>) {
+        let edge = self.node.out_port(port).edge().unwrap();
+        let endpoint_node = self.sched.graph.node(edge.node);
+        let in_port = endpoint_node.in_port(edge.port);
+    }
+    pub fn read<T>(&mut self) -> Data<T> {
+        self.node.cond.notify_one();
         unimplemented!();
     }
-    pub fn write<T>(&self, data: Data<T>) {
-        unimplemented!();
-    }
-    pub fn read<T>(&self) -> Data<T> {
-        unimplemented!();
-    }
-    pub fn read_n<T>(&self, n: usize) -> Data<T> {
+    pub fn read_n<T>(&mut self, n: usize) -> Data<T> {
+        self.node.cond.notify_one();
         unimplemented!();
     }
     // read_while, ...
@@ -57,22 +76,8 @@ pub struct NodeContext {
 }
 
 impl NodeContext {
-    pub fn lock<'a>(&'a self) -> NodeLock<'a> {
-        let node = self.sched.graph.node(self.id);
-        let mut locked = Vec::new();
-        for in_port in node.in_ports() {
-            let lock = in_port.data.lock().unwrap();
-            locked.push(lock);
-        }
-        for out_port in node.out_ports() {
-            if let Some(edge) = out_port.edge() {
-                let dst_node = self.sched.graph.node(edge.node);
-                let in_port = dst_node.in_port(edge.port);
-                let lock = in_port.data.lock().unwrap();
-                locked.push(lock);
-            }
-        }
-        NodeLock { locked }
+    pub fn lock<'a>(&'a self) -> NodeGuard<'a> {
+        NodeGuard::new(&*self.sched, self.id)
     }
 }
 
