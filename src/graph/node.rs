@@ -1,28 +1,5 @@
-use std::sync::{Arc, Condvar, Mutex};
-use std::cell::{Cell, RefCell};
+use std::sync::{Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-
-
-// TODO deal with variadic mess
-
-// TODO Put this elsewhere
-// clean it up
-// get rid of copy constraint
-// consider removing cell
-#[derive(Debug, Default)]
-pub struct CondvarCell<T> {
-    pub value: Mutex<T>,
-    pub cond: Condvar,
-}
-
-impl<T> CondvarCell<T> {
-    pub fn new(init: T) -> CondvarCell<T> {
-        CondvarCell {
-            value: Mutex::new(init),
-            cond: Condvar::new(),
-        }
-    }
-}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct NodeID(pub usize);

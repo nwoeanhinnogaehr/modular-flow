@@ -95,31 +95,4 @@ mod tests {
         });
         s.run();
     }
-    /*
-    #[test]
-    fn deadlock_test() {
-        let mut g = Graph::new();
-        let source = g.add_node(0, 2);
-        let sink = g.add_node(2, 0);
-        g.connect(source, OutPortID(0), sink, InPortID(0)).unwrap();
-        g.connect(source, OutPortID(1), sink, InPortID(1)).unwrap();
-        let s = Supervisor::new(g);
-        let src_ctx = s.node_ctx(source).unwrap();
-        thread::spawn(move || loop {
-            let data: Vec<u8> = vec![1, 2, 3, 4, 5];
-            println!("write.0");
-            src_ctx.write(OutPortID(0), &data);
-            println!("write.1");
-            src_ctx.write(OutPortID(1), &data);
-        });
-        let snk_ctx = s.node_ctx(sink).unwrap();
-        thread::spawn(move || loop {
-            let data = snk_ctx.read_async::<u8>(InPortID(0));
-            println!("sink.0 {:?}", &*data);
-            let data = snk_ctx.read_async_n::<u8>(InPortID(1), 111);
-            println!("sink.1 {:?}", &*data);
-        });
-        s.run();
-    }
-    */
 }
