@@ -2,12 +2,12 @@
 
 /// graph
 pub mod graph;
-pub mod supervisor;
+pub mod context;
 
 #[cfg(test)]
 mod tests {
     use graph::*;
-    use supervisor::*;
+    use context::*;
     use std::thread;
 
     #[test]
@@ -69,7 +69,7 @@ mod tests {
             .unwrap();
         g.connect(internal, OutPortID(0), sink, InPortID(0))
             .unwrap();
-        let s = Supervisor::new(g);
+        let s = Context::new(g);
         let src_ctx = s.node_ctx(source).unwrap();
         thread::spawn(move || loop {
             let mut guard = src_ctx.lock();
