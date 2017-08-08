@@ -1,10 +1,15 @@
 use std::sync::{Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// A unique identifier of any `Node` in a specific `Graph`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct NodeID(pub usize);
+
+/// A unique identifier of any `InPort` in a specific `Node`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct InPortID(pub usize);
+
+/// A unique identifier of any `OutPort` in a specific `Node`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct OutPortID(pub usize);
 
@@ -13,8 +18,6 @@ pub struct OutPortID(pub usize);
  *
  * It contains an ID, used as a global reference, a vector of input ports, and a vector of output
  * ports.
- *
- * At the moment there is no way for user code to get a mut Node.
  */
 pub struct Node {
     id: NodeID,
@@ -26,9 +29,6 @@ pub struct Node {
 impl Node {
     /**
      * Construct a new `Node` with the given ID, number of input ports, and number of output ports.
-     *
-     * User code should never need to call this. So for now, it is public to the crate only.
-     * User code should use `Graph::add_node` instead.
      */
     pub(crate) fn new(id: NodeID, num_in: usize, num_out: usize) -> Node {
         Node {
@@ -38,12 +38,24 @@ impl Node {
             attached: AtomicBool::new(false),
         }
     }
+
+    /**
+     * Does this node have any input ports?
+     */
     pub fn has_inputs(&self) -> bool {
         !self.in_ports.is_empty()
     }
+
+    /**
+     * Does this node have any output ports?
+     */
     pub fn has_outputs(&self) -> bool {
         !self.out_ports.is_empty()
     }
+
+    /**
+     * Returns the type of this node.
+     */
     pub fn node_type(&self) -> NodeType {
         if self.has_inputs() && self.has_outputs() {
             NodeType::Internal
@@ -57,23 +69,43 @@ impl Node {
             NodeType::Sink
         }
     }
+
+    /**
+     * Returns an array containing all input ports of this node, indexed by id.
+     */
     pub fn in_ports(&self) -> &[InPort] {
         &self.in_ports
     }
+
+    /**
+     * Returns an array containing all output ports of this node, indexed by id.
+     */
     pub fn out_ports(&self) -> &[OutPort] {
         &self.out_ports
     }
+
+    /**
+     * Gets an input port by id.
+     */
     pub fn in_port(&self, port_id: InPortID) -> &InPort {
         &self.in_ports[port_id.0]
     }
+
+    /**
+     * Gets an output port by id.
+     */
     pub fn out_port(&self, port_id: OutPortID) -> &OutPort {
         &self.out_ports[port_id.0]
     }
+
+    /**
+     * Returns the id of this node.
+     */
     pub fn id(&self) -> NodeID {
         self.id
     }
-    pub fn attach_thread(&self) -> Result<(), ()> {
-        println!("attach thread {:?}", self.id());
+
+    pub(crate) fn attach_thread(&self) -> Result<(), ()> {
         if self.attached
             .compare_and_swap(false, true, Ordering::SeqCst)
         {
@@ -82,8 +114,7 @@ impl Node {
             Ok(())
         }
     }
-    pub fn detach_thread(&self) -> Result<(), ()> {
-        println!("detach thread {:?}", self.id());
+    pub(crate) fn detach_thread(&self) -> Result<(), ()> {
         if self.attached
             .compare_and_swap(true, false, Ordering::SeqCst)
         {
@@ -110,31 +141,42 @@ pub enum NodeType {
 }
 
 /**
- * An edge is like a vector pointing to a specific port of a specific node, originating from
+ * An `InEdge` is like a vector pointing to a specific input port of a specific node, originating from
  * nowhere in particular.
  */
 #[derive(Copy, Clone, Debug)]
 pub struct InEdge {
+    /// Destination node
     pub node: NodeID,
+    /// Destination port
     pub port: InPortID,
 }
 impl InEdge {
+    /// Construct a new `InEdge`
     pub fn new(node: NodeID, port: InPortID) -> InEdge {
         InEdge { node, port }
     }
 }
+
+/**
+ * An `OutEdge` is like a vector pointing to a specific output port of a specific node, originating from
+ * nowhere in particular.
+ */
 #[derive(Copy, Clone, Debug)]
 pub struct OutEdge {
+    /// Destination node
     pub node: NodeID,
+    /// Destination port
     pub port: OutPortID,
 }
 impl OutEdge {
+    /// Construct a new `OutEdge`
     pub fn new(node: NodeID, port: OutPortID) -> OutEdge {
         OutEdge { node, port }
     }
 }
 
-pub trait Port {
+pub(crate) trait Port {
     type ID;
     type Edge;
     fn new(Option<Self::Edge>) -> Self;
@@ -145,10 +187,13 @@ pub trait Port {
     }
 }
 
+/**
+ * An `InPort` can recieve data from a connected `OutPort`.
+ */
 #[derive(Debug)]
 pub struct InPort {
     edge: Mutex<Option<OutEdge>>,
-    pub data: Mutex<Vec<u8>>,
+    pub(crate) data: Mutex<Vec<u8>>,
 }
 
 impl Port for InPort {
@@ -180,6 +225,9 @@ impl Default for InPort {
     }
 }
 
+/**
+ * An `OutPort` can send data to a connected `InPort`.
+ */
 #[derive(Debug)]
 pub struct OutPort {
     edge: Mutex<Option<InEdge>>,

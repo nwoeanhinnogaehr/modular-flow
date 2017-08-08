@@ -5,13 +5,19 @@ pub mod node;
 
 pub use self::node::*;
 
+/**
+ * A graph contains many `Node`s and connections between their `Port`s.
+ */
 pub struct Graph {
     nodes: Vec<Node>,
-    pub cond: Condvar,
-    pub lock: Mutex<()>,
+    pub(crate) cond: Condvar,
+    pub(crate) lock: Mutex<()>,
 }
 
 impl Graph {
+    /**
+     * Create a new empty graph.
+     */
     pub fn new() -> Graph {
         Graph {
             nodes: Vec::new(),
@@ -19,12 +25,14 @@ impl Graph {
             lock: Mutex::new(()),
         }
     }
+
     /**
      * Get a node by ID.
      */
     pub fn node(&self, node_id: NodeID) -> &Node {
         &self.nodes[node_id.0]
     }
+
     /**
      * Add a node with a fixed number of input and output ports.
      * The ID of the newly created node is returned.
@@ -34,6 +42,7 @@ impl Graph {
         self.nodes.push(Node::new(id, num_in, num_out));
         id
     }
+
     /**
      * Connects output port `src_port` of node `src_id` to input port `dst_port` of node `dst_id`.
      *
@@ -57,6 +66,7 @@ impl Graph {
             Ok(())
         }
     }
+
     /**
      * Disconnect an input port from the output port it is connected to, returning the edge that
      * was removed.
