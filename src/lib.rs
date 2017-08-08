@@ -90,8 +90,8 @@ mod tests {
         thread::spawn(move || loop {
             let mut guard = int_ctx.lock();
             guard.wait(|x| x.available(InPortID(0)) >= 32);
-            let d = guard.read_n(InPortID(0), 32);
-            println!("{:?}", *d);
+            let d = guard.read_n(InPortID(0), 32).unwrap();
+            println!("{:?}", d);
             guard.wait(|x| x.buffered(OutPortID(0)) < 7);
             guard.write(OutPortID(0), &d);
         });
@@ -99,9 +99,9 @@ mod tests {
         thread::spawn(move || loop {
             let mut guard = snk_ctx.lock();
             guard.wait(|x| x.available(InPortID(0)) >= 7);
-            let d = guard.read_n(InPortID(0), 7);
-            println!("sink {:?}", *d);
+            let d = guard.read_n(InPortID(0), 7).unwrap();
+            println!("sink {:?}", d);
         });
-        s.run();
+        thread::park();
     }
 }
