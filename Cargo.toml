@@ -1,6 +1,6 @@
 [package]
-name = "gpdc"
-version = "0.0.0"
+name = "modular-flow"
+version = "0.0.1"
 authors = ["Noah Weninger <nweninge@ualberta.ca>"]
 
 [dependencies]
