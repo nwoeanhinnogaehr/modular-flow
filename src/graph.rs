@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
  */
 pub struct Graph {
     nodes: Vec<Node>,
+
+    // I'd like to move these out of the graph eventually but with the current architecture it's
+    // most efficient to have them here.
     pub(crate) cond: Condvar,
     pub(crate) lock: Mutex<()>,
 }
@@ -143,9 +146,7 @@ impl Node {
             NodeType::Observer
         } else if self.has_outputs() {
             NodeType::Source
-        } else
-        /* if self.has_inputs() */
-        {
+        } else { // if self.has_inputs()
             NodeType::Sink
         }
     }

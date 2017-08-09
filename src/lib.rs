@@ -83,23 +83,23 @@ mod tests {
         let src_ctx = s.node_ctx(source).unwrap();
         thread::spawn(move || loop {
             let mut guard = src_ctx.lock();
-            guard.wait(|x| x.buffered(OutPortID(0)) < 32);
-            guard.write(OutPortID(0), &[1, 2, 3, 4, 5]);
+            guard.wait(|x| x.buffered::<i32>(OutPortID(0)) < 32);
+            guard.write::<i32>(OutPortID(0), &[-1, 2, -3, 4, -5]);
         });
         let int_ctx = s.node_ctx(internal).unwrap();
         thread::spawn(move || loop {
             let mut guard = int_ctx.lock();
-            guard.wait(|x| x.available(InPortID(0)) >= 32);
-            let d = guard.read_n(InPortID(0), 32).unwrap();
+            guard.wait(|x| x.available::<i32>(InPortID(0)) >= 32);
+            let d = guard.read_n::<i32>(InPortID(0), 32).unwrap();
             println!("{:?}", d);
-            guard.wait(|x| x.buffered(OutPortID(0)) < 7);
+            guard.wait(|x| x.buffered::<f64>(OutPortID(0)) < 7);
             guard.write(OutPortID(0), &d);
         });
         let snk_ctx = s.node_ctx(sink).unwrap();
         thread::spawn(move || loop {
             let mut guard = snk_ctx.lock();
-            guard.wait(|x| x.available(InPortID(0)) >= 7);
-            let d = guard.read_n(InPortID(0), 7).unwrap();
+            guard.wait(|x| x.available::<f64>(InPortID(0)) >= 7);
+            let d = guard.read_n::<f64>(InPortID(0), 7).unwrap();
             println!("sink {:?}", d);
         });
         thread::park();

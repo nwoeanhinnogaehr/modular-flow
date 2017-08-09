@@ -1,5 +1,76 @@
 use super::graph::*;
 use std::sync::{Arc, MutexGuard};
+use std::slice;
+use std::mem;
+
+/**
+ * An array of any type which is `ByteConvertible` can be converted to an array of bytes and back
+ * again.
+ */
+pub trait ByteConvertible: Sized {
+    /// Type returned if conversion fails.
+    type Error;
+    /// Converts a slice of this into a vector of bytes, returning `None` on failure.
+    fn to_bytes(data: &[Self]) -> Result<Vec<u8>, Self::Error>;
+    /// Converts a slice of bytes into a vector of this, returning `None` on failure.
+    fn from_bytes(data: &[u8]) -> Result<Vec<Self>, Self::Error>;
+}
+
+/**
+ * Any type which is `TransmuteByteConvertible` can be converted to an array of bytes by simply
+ * transmuting the underlying data.
+ */
+pub unsafe trait TransmuteByteConvertible: Sized + Clone {
+    /**
+     * Always returns `Ok`.
+     */
+    fn to_bytes(data: &[Self]) -> Result<Vec<u8>, ()> {
+        let mut out = Vec::new();
+        out.extend_from_slice(
+            unsafe {
+                slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() * mem::size_of::<Self>())
+            });
+        Ok(out)
+    }
+    /**
+     * Returns `Err` if the number of bytes given is not a multiple of the data size.
+     */
+    fn from_bytes(data: &[u8]) -> Result<Vec<Self>, ()> {
+        let mut out = Vec::new();
+        out.extend_from_slice(
+            if data.len() % mem::size_of::<Self>() == 0 {
+                unsafe {
+                    slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() / mem::size_of::<Self>())
+                }
+            } else {
+                return Err(())
+            });
+        Ok(out)
+    }
+}
+
+impl<T: TransmuteByteConvertible> ByteConvertible for T {
+    type Error = ();
+    fn to_bytes(data: &[Self]) -> Result<Vec<u8>, Self::Error> {
+        <T as TransmuteByteConvertible>::to_bytes(data)
+    }
+    fn from_bytes(data: &[u8]) -> Result<Vec<Self>, Self::Error> {
+        <T as TransmuteByteConvertible>::from_bytes(data)
+    }
+}
+
+unsafe impl TransmuteByteConvertible for i8 { }
+unsafe impl TransmuteByteConvertible for i16 { }
+unsafe impl TransmuteByteConvertible for i32 { }
+unsafe impl TransmuteByteConvertible for i64 { }
+unsafe impl TransmuteByteConvertible for u8 { }
+unsafe impl TransmuteByteConvertible for u16 { }
+unsafe impl TransmuteByteConvertible for u32 { }
+unsafe impl TransmuteByteConvertible for u64 { }
+unsafe impl TransmuteByteConvertible for usize { }
+unsafe impl TransmuteByteConvertible for isize { }
+unsafe impl TransmuteByteConvertible for f32 { }
+unsafe impl TransmuteByteConvertible for f64 { }
 
 /**
  * A `NodeGuard` holds a lock on the `Graph`, which prevents other threads from interacting with
@@ -39,59 +110,59 @@ impl<'a> NodeGuard<'a> {
     /**
      * Write `data` to `port`.
      */
-    pub fn write(&mut self, port: OutPortID, data: &[u8]) {
+    pub fn write<T: ByteConvertible>(&mut self, port: OutPortID, data: &[T]) -> Result<(), T::Error>{
         let edge = self.node.out_port(port).edge().unwrap();
         let endpoint_node = self.graph.node(edge.node);
         let in_port = endpoint_node.in_port(edge.port);
         let mut buffer = in_port.data.lock().unwrap();
-        buffer.extend(data.iter());
+        let converted_data = T::to_bytes(data)?;
+        buffer.extend(converted_data);
         self.graph.cond.notify_all();
+        Ok(())
     }
 
     /**
      * Read all available data from `port`.
      */
-    pub fn read(&mut self, port: InPortID) -> Vec<u8> {
-        let in_port = self.node.in_port(port);
-        let mut buffer = in_port.data.lock().unwrap();
-        let out = buffer.drain(..).collect();
-        self.graph.cond.notify_all();
-        out
+    pub fn read<T: ByteConvertible>(&mut self, port: InPortID) -> Result<Vec<T>, T::Error> {
+        let n = self.available::<T>(port);
+        self.read_n(port, n)
     }
 
     /**
      * Read exactly `n` bytes of data from `port`. If `n` bytes are not available, `None` is
      * returned.
      */
-    pub fn read_n(&mut self, port: InPortID, n: usize) -> Option<Vec<u8>> {
+    pub fn read_n<T: ByteConvertible>(&mut self, port: InPortID, n: usize) -> Result<Vec<T>, T::Error> {
+        let n_bytes = n * mem::size_of::<T>();
         let in_port = self.node.in_port(port);
         let mut buffer = in_port.data.lock().unwrap();
-        if buffer.len() < n {
-            return None;
+        if buffer.len() < n_bytes {
+            panic!("cannot read n! check available first!");
         }
-        let out = buffer.drain(..n).collect();
+        let out: Vec<u8> = buffer.drain(..n_bytes).collect();
         self.graph.cond.notify_all();
-        Some(out)
+        T::from_bytes(&out)
     }
 
     /**
      * Returns the number of bytes available to be read from the given input port.
      */
-    pub fn available(&self, port: InPortID) -> usize {
+    pub fn available<T: ByteConvertible>(&self, port: InPortID) -> usize {
         let in_port = self.node.in_port(port);
         let buffer = in_port.data.lock().unwrap();
-        buffer.len()
+        buffer.len() / mem::size_of::<T>()
     }
 
     /**
      * Returns the number of bytes buffered (i.e. waiting to be read) from the given output port.
      */
-    pub fn buffered(&self, port: OutPortID) -> usize {
+    pub fn buffered<T: ByteConvertible>(&self, port: OutPortID) -> usize {
         let edge = self.node.out_port(port).edge().unwrap();
         let endpoint_node = self.graph.node(edge.node);
         let in_port = endpoint_node.in_port(edge.port);
         let buffer = in_port.data.lock().unwrap();
-        buffer.len()
+        buffer.len() / mem::size_of::<T>()
     }
     // read_while, ...
 }
