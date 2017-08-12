@@ -111,7 +111,7 @@ impl<'a> NodeGuard<'a> {
     /**
      * Write `data` to `port`.
      */
-    pub fn write<T: ByteConvertible>(&mut self, port: OutPortID, data: &[T]) -> Result<(), T::Error>{
+    pub fn write<T: ByteConvertible>(&self, port: OutPortID, data: &[T]) -> Result<(), T::Error>{
         let edge = self.node.out_port(port).edge().unwrap();
         let endpoint_node = self.graph.node(edge.node);
         let in_port = endpoint_node.in_port(edge.port);
@@ -125,7 +125,7 @@ impl<'a> NodeGuard<'a> {
     /**
      * Read all available data from `port`.
      */
-    pub fn read<T: ByteConvertible>(&mut self, port: InPortID) -> Result<Vec<T>, T::Error> {
+    pub fn read<T: ByteConvertible>(&self, port: InPortID) -> Result<Vec<T>, T::Error> {
         let n = self.available::<T>(port);
         self.read_n(port, n)
     }
@@ -134,7 +134,7 @@ impl<'a> NodeGuard<'a> {
      * Read exactly `n` bytes of data from `port`. If `n` bytes are not available, `None` is
      * returned.
      */
-    pub fn read_n<T: ByteConvertible>(&mut self, port: InPortID, n: usize) -> Result<Vec<T>, T::Error> {
+    pub fn read_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>, T::Error> {
         let n_bytes = n * mem::size_of::<T>();
         let in_port = self.node.in_port(port);
         let mut buffer = in_port.data.lock().unwrap();
