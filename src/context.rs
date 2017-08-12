@@ -10,7 +10,7 @@ use std::ptr;
  * An array of any type which is `ByteConvertible` can be converted to an array of bytes and back
  * again.
  */
-pub trait ByteConvertible: Sized {
+pub trait ByteConvertible: Sized + Copy {
     /// Type returned if conversion fails.
     type Error: fmt::Debug;
     /// Converts a slice of this into a vector of bytes, returning `None` on failure.
@@ -50,7 +50,7 @@ pub unsafe trait TransmuteByteConvertible: Sized + Clone {
     }
 }
 
-impl<T: TransmuteByteConvertible> ByteConvertible for T {
+impl<T: TransmuteByteConvertible + Copy> ByteConvertible for T {
     type Error = ();
     fn to_bytes(data: &[Self]) -> Result<Vec<u8>, Self::Error> {
         <T as TransmuteByteConvertible>::to_bytes(data)
@@ -131,8 +131,7 @@ impl<'a> NodeGuard<'a> {
     }
 
     /**
-     * Read exactly `n` bytes of data from `port`. If `n` bytes are not available, `None` is
-     * returned.
+     * Read exactly `n` bytes of data from `port`. Panics if `n` bytes are not available.
      */
     pub fn read_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>, T::Error> {
         let n_bytes = n * mem::size_of::<T>();
@@ -142,6 +141,30 @@ impl<'a> NodeGuard<'a> {
             panic!("cannot read n! check available first!");
         }
         let out: Vec<u8> = buffer.drain(..n_bytes).collect();
+        self.graph.cond.notify_all();
+        T::from_bytes(&out)
+    }
+
+    /**
+     * Read all available data from `port` without consuming it.
+     */
+    pub fn peek<T: ByteConvertible>(&self, port: InPortID) -> Result<Vec<T>, T::Error> {
+        let n = self.available::<T>(port);
+        self.peek_n(port, n)
+    }
+
+    /**
+     * Read exactly `n` bytes of data from `port` without consuming it. Panics if `n` bytes are not
+     * available.
+     */
+    pub fn peek_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>, T::Error> {
+        let n_bytes = n * mem::size_of::<T>();
+        let in_port = self.node.in_port(port);
+        let buffer = in_port.data.lock().unwrap();
+        if buffer.len() < n_bytes {
+            panic!("cannot read n! check available first!");
+        }
+        let out: Vec<u8> = buffer.iter().cloned().take(n_bytes).collect();
         self.graph.cond.notify_all();
         T::from_bytes(&out)
     }
