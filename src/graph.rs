@@ -1,5 +1,6 @@
 use std::sync::{Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::VecDeque;
 
 /**
  * A graph contains many `Node`s and connections between their `Port`s.
@@ -315,7 +316,7 @@ pub(crate) trait Port {
 #[derive(Debug)]
 pub struct InPort {
     edge: Mutex<Option<OutEdge>>,
-    pub(crate) data: Mutex<Vec<u8>>,
+    pub(crate) data: Mutex<VecDeque<u8>>,
 }
 
 impl Port for InPort {
@@ -325,7 +326,7 @@ impl Port for InPort {
     fn new(edge: Option<OutEdge>) -> InPort {
         InPort {
             edge: Mutex::new(edge),
-            data: Mutex::new(Vec::new()),
+            data: Mutex::new(VecDeque::new()),
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
