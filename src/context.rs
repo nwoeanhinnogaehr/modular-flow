@@ -2,6 +2,7 @@ use super::graph::*;
 use std::sync::{Arc, MutexGuard};
 use std::slice;
 use std::mem;
+use std::fmt;
 
 /**
  * An array of any type which is `ByteConvertible` can be converted to an array of bytes and back
@@ -9,7 +10,7 @@ use std::mem;
  */
 pub trait ByteConvertible: Sized {
     /// Type returned if conversion fails.
-    type Error;
+    type Error: fmt::Debug;
     /// Converts a slice of this into a vector of bytes, returning `None` on failure.
     fn to_bytes(data: &[Self]) -> Result<Vec<u8>, Self::Error>;
     /// Converts a slice of bytes into a vector of this, returning `None` on failure.
