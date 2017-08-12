@@ -299,15 +299,40 @@ impl OutEdge {
     }
 }
 
+/**
+ * Generic interface for a port, implemented by both `InPort` and `OutPort`.
+ */
 pub trait Port {
+    /// The associated port ID type.
     type ID;
+    /// The associated edge type.
     type Edge;
+
+    /**
+     * Construct a new port with a given ID and edge.
+     */
     fn new(Self::ID, Option<Self::Edge>) -> Self;
+
+    /**
+     * Get the edge currently associated with this port, if any.
+     */
     fn edge(&self) -> Option<Self::Edge>;
+
+    /**
+     * Set the edge currently associated with this port.
+     */
     fn set_edge(&self, edge: Option<Self::Edge>);
+
+    /**
+     * Returns true iff this port has an edge.
+     */
     fn has_edge(&self) -> bool {
         self.edge().is_some()
     }
+
+    /**
+     * Returns the ID associated with this port.
+     */
     fn id(&self) -> Self::ID;
 }
 
