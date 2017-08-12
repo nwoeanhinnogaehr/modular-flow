@@ -88,6 +88,26 @@ impl Graph {
     }
 
     /**
+     * Connects `n` consecutive output ports of node `src_id`, starting with `src_port`, to `n`
+     * corresponding input ports of node `dst_id`, starting with `dst_id`.
+     *
+     * Returns Err if any such ports are already connected.
+     */
+    pub fn connect_n(
+        &self,
+        src_id: NodeID,
+        src_port: OutPortID,
+        dst_id: NodeID,
+        dst_port: InPortID,
+        n: usize,
+    ) -> Result<(), ()> {
+        for id in 0..n {
+            self.connect(src_id, OutPortID(src_port.0 + id), dst_id, InPortID(dst_port.0 + id))?;
+        }
+        Ok(())
+    }
+
+    /**
      * Disconnect an input port from the output port it is connected to, returning the edge that
      * was removed.
      *
