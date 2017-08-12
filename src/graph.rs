@@ -158,8 +158,8 @@ impl Node {
     pub(crate) fn new(id: NodeID, num_in: usize, num_out: usize) -> Node {
         Node {
             id,
-            in_ports: vec![InPort::default(); num_in],
-            out_ports: vec![OutPort::default(); num_out],
+            in_ports: (0..num_in).map(|id| Port::new(InPortID(id), None)).collect(),
+            out_ports: (0..num_out).map(|id| Port::new(OutPortID(id), None)).collect(),
             attached: AtomicBool::new(false),
         }
     }
@@ -299,15 +299,16 @@ impl OutEdge {
     }
 }
 
-pub(crate) trait Port {
+pub trait Port {
     type ID;
     type Edge;
-    fn new(Option<Self::Edge>) -> Self;
+    fn new(Self::ID, Option<Self::Edge>) -> Self;
     fn edge(&self) -> Option<Self::Edge>;
     fn set_edge(&self, edge: Option<Self::Edge>);
     fn has_edge(&self) -> bool {
         self.edge().is_some()
     }
+    fn id(&self) -> Self::ID;
 }
 
 /**
@@ -317,16 +318,18 @@ pub(crate) trait Port {
 pub struct InPort {
     edge: Mutex<Option<OutEdge>>,
     pub(crate) data: Mutex<VecDeque<u8>>,
+    id: InPortID,
 }
 
 impl Port for InPort {
     type ID = InPortID;
     type Edge = OutEdge;
 
-    fn new(edge: Option<OutEdge>) -> InPort {
+    fn new(id: InPortID, edge: Option<OutEdge>) -> InPort {
         InPort {
             edge: Mutex::new(edge),
             data: Mutex::new(VecDeque::new()),
+            id
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
@@ -335,16 +338,8 @@ impl Port for InPort {
     fn set_edge(&self, edge: Option<Self::Edge>) {
         *self.edge.lock().unwrap() = edge;
     }
-}
-
-impl Clone for InPort {
-    fn clone(&self) -> Self {
-        InPort::new(self.edge())
-    }
-}
-impl Default for InPort {
-    fn default() -> InPort {
-        InPort::new(None)
+    fn id(&self) -> Self::ID {
+        self.id
     }
 }
 
@@ -354,14 +349,16 @@ impl Default for InPort {
 #[derive(Debug)]
 pub struct OutPort {
     edge: Mutex<Option<InEdge>>,
+    id: OutPortID,
 }
 
 impl Port for OutPort {
     type ID = OutPortID;
     type Edge = InEdge;
-    fn new(edge: Option<InEdge>) -> OutPort {
+    fn new(id: OutPortID, edge: Option<InEdge>) -> OutPort {
         OutPort {
             edge: Mutex::new(edge),
+            id
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
@@ -370,15 +367,7 @@ impl Port for OutPort {
     fn set_edge(&self, edge: Option<Self::Edge>) {
         *self.edge.lock().unwrap() = edge;
     }
-}
-
-impl Default for OutPort {
-    fn default() -> OutPort {
-        OutPort::new(None)
-    }
-}
-impl Clone for OutPort {
-    fn clone(&self) -> Self {
-        OutPort::new(self.edge())
+    fn id(&self) -> Self::ID {
+        self.id
     }
 }
