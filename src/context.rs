@@ -165,7 +165,7 @@ impl<'a> NodeGuard<'a> {
         let buffer = in_port.data.lock().unwrap();
         buffer.len() / mem::size_of::<T>()
     }
-    // read_while, ...
+    // read_while, peek, ...
 
     /**
      * Gets the associated `Node`.
@@ -196,6 +196,21 @@ impl NodeContext {
      */
     pub fn lock<'a>(&'a self) -> NodeGuard<'a> {
         NodeGuard::new(&*self.graph, self.id)
+    }
+
+    /**
+     * Gets the associated `Node`.
+     */
+    pub fn node<'a>(&'a self) -> &'a Node {
+        self.graph.node(self.id)
+    }
+
+    /**
+     * Gets the associated `Graph`.
+     */
+    pub fn graph<'a>(&'a self) -> &'a Graph {
+        use std::borrow::Borrow;
+        self.graph.borrow()
     }
 }
 
