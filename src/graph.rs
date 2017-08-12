@@ -67,6 +67,27 @@ impl Graph {
     }
 
     /**
+     * Connects all output ports of node `src_id` to corresponding input ports of node `dst_id`.
+     *
+     * Returns Err if any such ports are already connected, or if the nodes have different port
+     * counts.
+     */
+    pub fn connect_all(
+        &self,
+        src_id: NodeID,
+        dst_id: NodeID,
+    ) -> Result<(), ()> {
+        let n = self.node(src_id).out_ports().len();
+        if n != self.node(dst_id).in_ports().len() {
+            return Err(())
+        }
+        for id in 0..n {
+            self.connect(src_id, OutPortID(id), dst_id, InPortID(id))?;
+        }
+        Ok(())
+    }
+
+    /**
      * Disconnect an input port from the output port it is connected to, returning the edge that
      * was removed.
      *
