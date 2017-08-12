@@ -73,14 +73,10 @@ impl Graph {
      * Returns Err if any such ports are already connected, or if the nodes have different port
      * counts.
      */
-    pub fn connect_all(
-        &self,
-        src_id: NodeID,
-        dst_id: NodeID,
-    ) -> Result<(), ()> {
+    pub fn connect_all(&self, src_id: NodeID, dst_id: NodeID) -> Result<(), ()> {
         let n = self.node(src_id).out_ports().len();
         if n != self.node(dst_id).in_ports().len() {
-            return Err(())
+            return Err(());
         }
         for id in 0..n {
             self.connect(src_id, OutPortID(id), dst_id, InPortID(id))?;
@@ -188,7 +184,8 @@ impl Node {
             NodeType::Observer
         } else if self.has_outputs() {
             NodeType::Source
-        } else { // if self.has_inputs()
+        } else {
+            // if self.has_inputs()
             NodeType::Sink
         }
     }
@@ -229,18 +226,14 @@ impl Node {
     }
 
     pub(crate) fn attach_thread(&self) -> Result<(), ()> {
-        if self.attached
-            .compare_and_swap(false, true, Ordering::SeqCst)
-        {
+        if self.attached.compare_and_swap(false, true, Ordering::SeqCst) {
             Err(())
         } else {
             Ok(())
         }
     }
     pub(crate) fn detach_thread(&self) -> Result<(), ()> {
-        if self.attached
-            .compare_and_swap(true, false, Ordering::SeqCst)
-        {
+        if self.attached.compare_and_swap(true, false, Ordering::SeqCst) {
             Ok(())
         } else {
             Err(())
@@ -264,8 +257,8 @@ pub enum NodeType {
 }
 
 /**
- * An `InEdge` is like a vector pointing to a specific input port of a specific node, originating from
- * nowhere in particular.
+ * An `InEdge` is like a vector pointing to a specific input port of a specific node, originating
+ * from nowhere in particular.
  */
 #[derive(Copy, Clone, Debug)]
 pub struct InEdge {
@@ -282,8 +275,8 @@ impl InEdge {
 }
 
 /**
- * An `OutEdge` is like a vector pointing to a specific output port of a specific node, originating from
- * nowhere in particular.
+ * An `OutEdge` is like a vector pointing to a specific output port of a specific node, originating
+ * from nowhere in particular.
  */
 #[derive(Copy, Clone, Debug)]
 pub struct OutEdge {
@@ -354,7 +347,7 @@ impl Port for InPort {
         InPort {
             edge: Mutex::new(edge),
             data: Mutex::new(VecDeque::new()),
-            id
+            id,
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
@@ -383,7 +376,7 @@ impl Port for OutPort {
     fn new(id: OutPortID, edge: Option<InEdge>) -> OutPort {
         OutPort {
             edge: Mutex::new(edge),
-            id
+            id,
         }
     }
     fn edge(&self) -> Option<Self::Edge> {

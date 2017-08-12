@@ -1,8 +1,10 @@
 use super::graph::*;
 use std::sync::{Arc, MutexGuard};
+use std::cell::UnsafeCell;
 use std::slice;
 use std::mem;
 use std::fmt;
+use std::ptr;
 
 /**
  * An array of any type which is `ByteConvertible` can be converted to an array of bytes and back
@@ -27,10 +29,9 @@ pub unsafe trait TransmuteByteConvertible: Sized + Clone {
      */
     fn to_bytes(data: &[Self]) -> Result<Vec<u8>, ()> {
         let mut out = Vec::new();
-        out.extend_from_slice(
-            unsafe {
-                slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() * mem::size_of::<Self>())
-            });
+        out.extend_from_slice(unsafe {
+            slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() * mem::size_of::<Self>())
+        });
         Ok(out)
     }
     /**
@@ -38,14 +39,13 @@ pub unsafe trait TransmuteByteConvertible: Sized + Clone {
      */
     fn from_bytes(data: &[u8]) -> Result<Vec<Self>, ()> {
         let mut out = Vec::new();
-        out.extend_from_slice(
-            if data.len() % mem::size_of::<Self>() == 0 {
-                unsafe {
-                    slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() / mem::size_of::<Self>())
-                }
-            } else {
-                return Err(())
-            });
+        out.extend_from_slice(if data.len() % mem::size_of::<Self>() == 0 {
+            unsafe {
+                slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() / mem::size_of::<Self>())
+            }
+        } else {
+            return Err(());
+        });
         Ok(out)
     }
 }
@@ -60,18 +60,18 @@ impl<T: TransmuteByteConvertible> ByteConvertible for T {
     }
 }
 
-unsafe impl TransmuteByteConvertible for i8 { }
-unsafe impl TransmuteByteConvertible for i16 { }
-unsafe impl TransmuteByteConvertible for i32 { }
-unsafe impl TransmuteByteConvertible for i64 { }
-unsafe impl TransmuteByteConvertible for u8 { }
-unsafe impl TransmuteByteConvertible for u16 { }
-unsafe impl TransmuteByteConvertible for u32 { }
-unsafe impl TransmuteByteConvertible for u64 { }
-unsafe impl TransmuteByteConvertible for usize { }
-unsafe impl TransmuteByteConvertible for isize { }
-unsafe impl TransmuteByteConvertible for f32 { }
-unsafe impl TransmuteByteConvertible for f64 { }
+unsafe impl TransmuteByteConvertible for i8 {}
+unsafe impl TransmuteByteConvertible for i16 {}
+unsafe impl TransmuteByteConvertible for i32 {}
+unsafe impl TransmuteByteConvertible for i64 {}
+unsafe impl TransmuteByteConvertible for u8 {}
+unsafe impl TransmuteByteConvertible for u16 {}
+unsafe impl TransmuteByteConvertible for u32 {}
+unsafe impl TransmuteByteConvertible for u64 {}
+unsafe impl TransmuteByteConvertible for usize {}
+unsafe impl TransmuteByteConvertible for isize {}
+unsafe impl TransmuteByteConvertible for f32 {}
+unsafe impl TransmuteByteConvertible for f64 {}
 
 /**
  * A `NodeGuard` holds a lock on the `Graph`, which prevents other threads from interacting with
@@ -81,13 +81,13 @@ unsafe impl TransmuteByteConvertible for f64 { }
 pub struct NodeGuard<'a> {
     node: &'a Node,
     graph: &'a Graph,
-    guard: Option<MutexGuard<'a, ()>>,
+    guard: UnsafeCell<MutexGuard<'a, ()>>,
 }
 
 impl<'a> NodeGuard<'a> {
     fn new(graph: &'a Graph, node_id: NodeID) -> NodeGuard<'a> {
         let node = graph.node(node_id);
-        let guard = Some(graph.lock.lock().unwrap());
+        let guard = UnsafeCell::new(graph.lock.lock().unwrap());
         NodeGuard { node, graph, guard }
     }
 
@@ -97,21 +97,21 @@ impl<'a> NodeGuard<'a> {
      * another node. It is given an immutable reference to this `NodeGuard` as a parameter, which
      * can be used to check availability of data.
      */
-    pub fn wait<F>(&mut self, mut cond: F)
+    pub fn wait<F>(&self, mut cond: F)
     where
         F: FnMut(&Self) -> bool,
     {
-        let mut guard = self.guard.take().unwrap();
         while !cond(self) {
-            guard = self.graph.cond.wait(guard).unwrap();
+            unsafe {
+                ptr::write(self.guard.get(), self.graph.cond.wait(ptr::read(self.guard.get())).unwrap());
+            }
         }
-        self.guard = Some(guard);
     }
 
     /**
      * Write `data` to `port`.
      */
-    pub fn write<T: ByteConvertible>(&self, port: OutPortID, data: &[T]) -> Result<(), T::Error>{
+    pub fn write<T: ByteConvertible>(&self, port: OutPortID, data: &[T]) -> Result<(), T::Error> {
         let edge = self.node.out_port(port).edge().unwrap();
         let endpoint_node = self.graph.node(edge.node);
         let in_port = endpoint_node.in_port(edge.port);

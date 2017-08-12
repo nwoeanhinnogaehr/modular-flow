@@ -1,7 +1,7 @@
 #![warn(missing_docs)]
 /*!
- * This is some kind of a library for dataflow computation. It's still very experimental and may become
- * something completely different in the end.
+ * This is some kind of a library for dataflow computation. It's still very experimental and may
+ * become something completely different in the end.
  *
  * The end goal is to use it for procedural and generative art. It's inspired by Pure Data and
  * Max/MSP, but will probably have less focus on graphical programming. Modular live coding,
@@ -27,8 +27,7 @@ mod tests {
         let sink = g.add_node(1, 0);
         g.disconnect(sink, InPortID(0)).unwrap_err();
         g.connect(source, OutPortID(0), sink, InPortID(0)).unwrap();
-        g.connect(source, OutPortID(0), sink, InPortID(0))
-            .unwrap_err();
+        g.connect(source, OutPortID(0), sink, InPortID(0)).unwrap_err();
         g.disconnect(sink, InPortID(0)).unwrap();
         g.disconnect(sink, InPortID(0)).unwrap_err();
         g.connect(source, OutPortID(0), sink, InPortID(0)).unwrap();
@@ -42,15 +41,12 @@ mod tests {
         g.disconnect(sink, InPortID(0)).unwrap_err();
         g.disconnect(sink, InPortID(1)).unwrap_err();
         g.connect(source, OutPortID(0), sink, InPortID(0)).unwrap();
-        g.connect(source, OutPortID(0), sink, InPortID(0))
-            .unwrap_err();
-        g.connect(source, OutPortID(1), sink, InPortID(0))
-            .unwrap_err();
+        g.connect(source, OutPortID(0), sink, InPortID(0)).unwrap_err();
+        g.connect(source, OutPortID(1), sink, InPortID(0)).unwrap_err();
         g.connect(source, OutPortID(1), sink, InPortID(1)).unwrap();
         g.disconnect(sink, InPortID(0)).unwrap();
         g.disconnect(sink, InPortID(0)).unwrap_err();
-        g.connect(source, OutPortID(0), sink, InPortID(1))
-            .unwrap_err();
+        g.connect(source, OutPortID(0), sink, InPortID(1)).unwrap_err();
         g.disconnect(sink, InPortID(1)).unwrap();
         g.connect(source, OutPortID(0), sink, InPortID(1)).unwrap();
     }
@@ -75,10 +71,8 @@ mod tests {
         let source = g.add_node(0, 1);
         let internal = g.add_node(1, 1);
         let sink = g.add_node(1, 0);
-        g.connect(source, OutPortID(0), internal, InPortID(0))
-            .unwrap();
-        g.connect(internal, OutPortID(0), sink, InPortID(0))
-            .unwrap();
+        g.connect(source, OutPortID(0), internal, InPortID(0)).unwrap();
+        g.connect(internal, OutPortID(0), sink, InPortID(0)).unwrap();
         let s = Context::new(g);
         let src_ctx = s.node_ctx(source).unwrap();
         thread::spawn(move || loop {
