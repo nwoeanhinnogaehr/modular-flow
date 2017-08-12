@@ -1,6 +1,7 @@
 use std::sync::{Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
+use std::cell::UnsafeCell;
 
 /**
  * A graph contains many `Node`s and connections between their `Port`s.
@@ -8,8 +9,6 @@ use std::collections::VecDeque;
 pub struct Graph {
     nodes: Vec<Node>,
 
-    // I'd like to move these out of the graph eventually but with the current architecture it's
-    // most efficient to have them here.
     pub(crate) cond: Condvar,
     pub(crate) lock: Mutex<()>,
 }
@@ -335,9 +334,17 @@ pub trait Port {
 #[derive(Debug)]
 pub struct InPort {
     edge: Mutex<Option<OutEdge>>,
-    pub(crate) data: Mutex<VecDeque<u8>>,
+    pub(crate) data: UnsafeCell<VecDeque<u8>>,
     id: InPortID,
 }
+
+impl InPort {
+    /// Safe as long as you are holding the graph lock
+    pub(crate) unsafe fn data(&self) -> &mut VecDeque<u8> {
+        &mut *self.data.get()
+    }
+}
+unsafe impl Sync for InPort {}
 
 impl Port for InPort {
     type ID = InPortID;
@@ -346,7 +353,7 @@ impl Port for InPort {
     fn new(id: InPortID, edge: Option<OutEdge>) -> InPort {
         InPort {
             edge: Mutex::new(edge),
-            data: Mutex::new(VecDeque::new()),
+            data: UnsafeCell::new(VecDeque::new()),
             id,
         }
     }

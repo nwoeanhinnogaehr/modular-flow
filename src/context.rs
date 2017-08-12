@@ -115,7 +115,7 @@ impl<'a> NodeGuard<'a> {
         let edge = self.node.out_port(port).edge().unwrap();
         let endpoint_node = self.graph.node(edge.node);
         let in_port = endpoint_node.in_port(edge.port);
-        let mut buffer = in_port.data.lock().unwrap();
+        let buffer = unsafe { in_port.data() };
         let converted_data = T::to_bytes(data)?;
         buffer.extend(converted_data);
         self.graph.cond.notify_all();
@@ -136,7 +136,7 @@ impl<'a> NodeGuard<'a> {
     pub fn read_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>, T::Error> {
         let n_bytes = n * mem::size_of::<T>();
         let in_port = self.node.in_port(port);
-        let mut buffer = in_port.data.lock().unwrap();
+        let buffer = unsafe { in_port.data() };
         if buffer.len() < n_bytes {
             panic!("cannot read n! check available first!");
         }
@@ -160,7 +160,7 @@ impl<'a> NodeGuard<'a> {
     pub fn peek_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>, T::Error> {
         let n_bytes = n * mem::size_of::<T>();
         let in_port = self.node.in_port(port);
-        let buffer = in_port.data.lock().unwrap();
+        let buffer = unsafe { in_port.data() };
         if buffer.len() < n_bytes {
             panic!("cannot read n! check available first!");
         }
@@ -174,7 +174,7 @@ impl<'a> NodeGuard<'a> {
      */
     pub fn available<T: ByteConvertible>(&self, port: InPortID) -> usize {
         let in_port = self.node.in_port(port);
-        let buffer = in_port.data.lock().unwrap();
+        let buffer = unsafe { in_port.data() };
         buffer.len() / mem::size_of::<T>()
     }
 
@@ -185,7 +185,7 @@ impl<'a> NodeGuard<'a> {
         let edge = self.node.out_port(port).edge().unwrap();
         let endpoint_node = self.graph.node(edge.node);
         let in_port = endpoint_node.in_port(edge.port);
-        let buffer = in_port.data.lock().unwrap();
+        let buffer = unsafe { in_port.data() };
         buffer.len() / mem::size_of::<T>()
     }
     // read_while, peek, ...
