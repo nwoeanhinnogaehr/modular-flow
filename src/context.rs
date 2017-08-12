@@ -166,6 +166,20 @@ impl<'a> NodeGuard<'a> {
         buffer.len() / mem::size_of::<T>()
     }
     // read_while, ...
+
+    /**
+     * Gets the associated `Node`.
+     */
+    pub fn node(&self) -> &Node {
+        self.node
+    }
+
+    /**
+     * Gets the associated `Graph`.
+     */
+    pub fn graph(&self) -> &Graph {
+        self.graph
+    }
 }
 
 /**
