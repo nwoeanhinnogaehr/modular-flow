@@ -5,6 +5,8 @@ use std::slice;
 use std::mem;
 use std::fmt;
 use std::ptr;
+use num_complex::Complex;
+use std::ops::Deref;
 
 /**
  * An array of any type which is `ByteConvertible` can be converted to an array of bytes and back
@@ -72,6 +74,36 @@ unsafe impl TransmuteByteConvertible for usize {}
 unsafe impl TransmuteByteConvertible for isize {}
 unsafe impl TransmuteByteConvertible for f32 {}
 unsafe impl TransmuteByteConvertible for f64 {}
+unsafe impl TransmuteByteConvertible for Complex<f32> {}
+unsafe impl TransmuteByteConvertible for Complex<f64> {}
+
+pub struct DataFrame<T: ByteConvertible> {
+    pub data: Vec<T>,
+}
+
+impl<T: ByteConvertible> DataFrame<T> {
+    pub fn new(data: Vec<T>) -> DataFrame<T> {
+        DataFrame { data }
+    }
+    pub fn read(lock: &NodeGuard, port: InPortID) -> DataFrame<T> {
+        lock.wait(|lock| lock.available::<usize>(port) >= 1);
+        let len = lock.read_n::<usize>(port, 1).unwrap()[0];
+        lock.wait(|lock| lock.available::<T>(port) >= len);
+        DataFrame::new(lock.read_n::<T>(port, len).unwrap())
+    }
+
+    pub fn write(&self, lock: &NodeGuard, port: OutPortID) {
+        lock.write(port, &[self.data.len()]).unwrap();
+        lock.write(port, &self.data).unwrap();
+    }
+}
+
+impl<T: ByteConvertible> Deref for DataFrame<T> {
+    type Target = Vec<T>;
+    fn deref(&self) -> &Vec<T> {
+        &self.data
+    }
+}
 
 /**
  * A `NodeGuard` holds a lock on the `Graph`, which prevents other threads from interacting with
@@ -131,7 +163,7 @@ impl<'a> NodeGuard<'a> {
     }
 
     /**
-     * Read exactly `n` bytes of data from `port`. Panics if `n` bytes are not available.
+     * Read exactly `n` objects of type `T` from `port`. Panics if `n` objects are not available.
      */
     pub fn read_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>, T::Error> {
         let n_bytes = n * mem::size_of::<T>();
@@ -154,8 +186,19 @@ impl<'a> NodeGuard<'a> {
     }
 
     /**
-     * Read exactly `n` bytes of data from `port` without consuming it. Panics if `n` bytes are not
-     * available.
+     * Read all available data from `port` without consuming it, starting after `index` bytes.
+     *
+     * Panics if there are not enough bytes available to skip to `index`.
+     */
+    pub fn peek_at<T: ByteConvertible>(&self, port: InPortID, index: usize) -> Result<Vec<T>, T::Error> {
+        let n = self.available::<T>(port);
+        assert!(n >= mem::size_of::<T>());
+        self.peek_n_at(port, n - index * mem::size_of::<T>(), index)
+    }
+
+    /**
+     * Read exactly `n` objects of type `T` from `port` without consuming it. Panics if `n` objects
+     * of type `T` are not available starting at `index`.
      */
     pub fn peek_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>, T::Error> {
         let n_bytes = n * mem::size_of::<T>();
@@ -165,6 +208,22 @@ impl<'a> NodeGuard<'a> {
             panic!("cannot read n! check available first!");
         }
         let out: Vec<u8> = buffer.iter().cloned().take(n_bytes).collect();
+        self.graph.cond.notify_all();
+        T::from_bytes(&out)
+    }
+
+    /**
+     * Read exactly `n` objects of type `T` from `port` without consuming it, starting after
+     * `index` bytes. Panics if `n` objects of type `T` are not available starting at `index`.
+     */
+    pub fn peek_n_at<T: ByteConvertible>(&self, port: InPortID, n: usize, index: usize) -> Result<Vec<T>, T::Error> {
+        let n_bytes = n * mem::size_of::<T>();
+        let in_port = self.node.in_port(port);
+        let buffer = unsafe { in_port.data() };
+        if buffer.len() - index < n_bytes {
+            panic!("cannot read n! check available first!");
+        }
+        let out: Vec<u8> = buffer.iter().cloned().skip(index).take(n_bytes).collect();
         self.graph.cond.notify_all();
         T::from_bytes(&out)
     }

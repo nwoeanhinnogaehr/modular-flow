@@ -8,6 +8,8 @@
  * perhaps?
  */
 
+extern crate num_complex;
+
 /// Describes the data structure of the computation graph.
 pub mod graph;
 
