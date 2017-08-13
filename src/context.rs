@@ -216,7 +216,12 @@ impl<'a> NodeGuard<'a> {
      * Read exactly `n` objects of type `T` from `port` without consuming it, starting after
      * `index` bytes. Panics if `n` objects of type `T` are not available starting at `index`.
      */
-    pub fn peek_n_at<T: ByteConvertible>(&self, port: InPortID, n: usize, index: usize) -> Result<Vec<T>, T::Error> {
+    pub fn peek_n_at<T: ByteConvertible>(
+        &self,
+        port: InPortID,
+        n: usize,
+        index: usize,
+    ) -> Result<Vec<T>, T::Error> {
         let n_bytes = n * mem::size_of::<T>();
         let in_port = self.node.in_port(port);
         let buffer = unsafe { in_port.data() };
