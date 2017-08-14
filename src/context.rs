@@ -76,25 +76,47 @@ unsafe impl TransmuteByteConvertible for f32 {}
 unsafe impl TransmuteByteConvertible for f64 {}
 unsafe impl TransmuteByteConvertible for Complex<f32> {}
 unsafe impl TransmuteByteConvertible for Complex<f64> {}
+unsafe impl<A, B> TransmuteByteConvertible for (A, B)
+where
+    A: TransmuteByteConvertible,
+    B: TransmuteByteConvertible,
+{
+}
+unsafe impl<A, B, C> TransmuteByteConvertible for (A, B, C)
+where
+    A: TransmuteByteConvertible,
+    B: TransmuteByteConvertible,
+    C: TransmuteByteConvertible,
+{
+}
 
 pub struct DataFrame<T: ByteConvertible> {
     pub data: Vec<T>,
 }
 
 impl<T: ByteConvertible> DataFrame<T> {
-    pub fn new(data: Vec<T>) -> DataFrame<T> {
-        DataFrame { data }
-    }
-    pub fn read(lock: &NodeGuard, port: InPortID) -> DataFrame<T> {
+    pub fn read(lock: &NodeGuard, port: InPortID) -> Vec<T> {
         lock.wait(|lock| lock.available::<usize>(port) >= 1);
         let len = lock.read_n::<usize>(port, 1).unwrap()[0];
         lock.wait(|lock| lock.available::<T>(port) >= len);
-        DataFrame::new(lock.read_n::<T>(port, len).unwrap())
+        lock.read_n::<T>(port, len).unwrap()
     }
 
-    pub fn write(&self, lock: &NodeGuard, port: OutPortID) {
-        lock.write(port, &[self.data.len()]).unwrap();
-        lock.write(port, &self.data).unwrap();
+    pub fn try_read(lock: &NodeGuard, port: InPortID) -> Option<Vec<T>> {
+        if lock.available::<usize>(port) < 1 {
+            return None;
+        }
+        let len = lock.peek_n::<usize>(port, 1).unwrap()[0];
+        if lock.available_at::<T>(port, mem::size_of::<usize>()) < len {
+            return None;
+        }
+        lock.read_n::<usize>(port, 1).unwrap();
+        Some(lock.read_n::<T>(port, len).unwrap())
+    }
+
+    pub fn write(lock: &NodeGuard, port: OutPortID, data: &[T]) {
+        lock.write(port, &[data.len()]).unwrap();
+        lock.write(port, &data).unwrap();
     }
 }
 
@@ -181,8 +203,7 @@ impl<'a> NodeGuard<'a> {
      * Read all available data from `port` without consuming it.
      */
     pub fn peek<T: ByteConvertible>(&self, port: InPortID) -> Result<Vec<T>, T::Error> {
-        let n = self.available::<T>(port);
-        self.peek_n(port, n)
+        self.peek_at(port, 0)
     }
 
     /**
@@ -201,15 +222,7 @@ impl<'a> NodeGuard<'a> {
      * of type `T` are not available starting at `index`.
      */
     pub fn peek_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>, T::Error> {
-        let n_bytes = n * mem::size_of::<T>();
-        let in_port = self.node.in_port(port);
-        let buffer = unsafe { in_port.data() };
-        if buffer.len() < n_bytes {
-            panic!("cannot read n! check available first!");
-        }
-        let out: Vec<u8> = buffer.iter().cloned().take(n_bytes).collect();
-        self.graph.cond.notify_all();
-        T::from_bytes(&out)
+        self.peek_n_at(port, n, 0)
     }
 
     /**
@@ -237,13 +250,23 @@ impl<'a> NodeGuard<'a> {
      * Returns the number of bytes available to be read from the given input port.
      */
     pub fn available<T: ByteConvertible>(&self, port: InPortID) -> usize {
-        let in_port = self.node.in_port(port);
-        let buffer = unsafe { in_port.data() };
-        buffer.len() / mem::size_of::<T>()
+        self.available_at::<T>(port, 0)
     }
 
     /**
-     * Returns the number of bytes buffered (i.e. waiting to be read) from the given output port.
+     * Returns the number of objects of type `T` available to be read from the given input port,
+     * after skipping `index` bytes.
+     */
+    pub fn available_at<T: ByteConvertible>(&self, port: InPortID, index: usize) -> usize {
+        let in_port = self.node.in_port(port);
+        let buffer = unsafe { in_port.data() };
+        assert!(buffer.len() >= index);
+        (buffer.len() - index) / mem::size_of::<T>()
+    }
+
+    /**
+     * Returns the number of objects of type `T` buffered (i.e. waiting to be read) from the given
+     * output port.
      */
     pub fn buffered<T: ByteConvertible>(&self, port: OutPortID) -> usize {
         let edge = self.node.out_port(port).edge().unwrap();
