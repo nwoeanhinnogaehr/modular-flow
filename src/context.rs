@@ -7,6 +7,7 @@ use std::fmt;
 use std::ptr;
 use num_complex::Complex;
 use std::ops::Deref;
+use std::borrow::Borrow;
 
 /**
  * An array of any type which is `ByteConvertible` can be converted to an array of bytes and back
@@ -133,13 +134,13 @@ impl<T: ByteConvertible> Deref for DataFrame<T> {
  * for more details).
  */
 pub struct NodeGuard<'a> {
-    node: &'a Arc<Node>,
+    node: &'a Node,
     graph: &'a Graph,
     guard: UnsafeCell<MutexGuard<'a, ()>>,
 }
 
 impl<'a> NodeGuard<'a> {
-    fn new(graph: &'a Graph, node: &'a Arc<Node>) -> NodeGuard<'a> {
+    fn new(graph: &'a Graph, node: &'a Node) -> NodeGuard<'a> {
         let guard = UnsafeCell::new(graph.lock.lock().unwrap());
         NodeGuard { node, graph, guard }
     }
@@ -280,8 +281,8 @@ impl<'a> NodeGuard<'a> {
     /**
      * Gets the associated `Node`.
      */
-    pub fn node(&self) -> &Arc<Node> {
-        &self.node
+    pub fn node(&self) -> &Node {
+        self.node
     }
 
     /**
@@ -305,22 +306,21 @@ impl NodeContext {
      * Lock the graph, returning a `NodeGuard` which can be used for interacting with other nodes.
      */
     pub fn lock<'a>(&'a self) -> NodeGuard<'a> {
-        NodeGuard::new(&*self.graph, &self.node)
+        NodeGuard::new(self.graph(), self.node())
     }
 
     /**
      * Gets the associated `Graph`.
      */
     pub fn graph<'a>(&'a self) -> &'a Graph {
-        use std::borrow::Borrow;
         self.graph.borrow()
     }
 
     /**
      * Gets the associated `Node`.
      */
-    pub fn node<'a>(&'a self) -> &Arc<Node> {
-        &self.node
+    pub fn node<'a>(&'a self) -> &Node {
+        self.node.borrow()
     }
 }
 
