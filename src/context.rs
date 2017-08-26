@@ -133,14 +133,13 @@ impl<T: ByteConvertible> Deref for DataFrame<T> {
  * for more details).
  */
 pub struct NodeGuard<'a> {
-    node: &'a Node,
+    node: &'a Arc<Node>,
     graph: &'a Graph,
     guard: UnsafeCell<MutexGuard<'a, ()>>,
 }
 
 impl<'a> NodeGuard<'a> {
-    fn new(graph: &'a Graph, node_id: NodeID) -> NodeGuard<'a> {
-        let node = graph.node(node_id);
+    fn new(graph: &'a Graph, node: &'a Arc<Node>) -> NodeGuard<'a> {
         let guard = UnsafeCell::new(graph.lock.lock().unwrap());
         NodeGuard { node, graph, guard }
     }
@@ -166,8 +165,9 @@ impl<'a> NodeGuard<'a> {
      * Write `data` to `port`.
      */
     pub fn write<T: ByteConvertible>(&self, port: OutPortID, data: &[T]) -> Result<(), T::Error> {
-        let edge = self.node.out_port(port).edge().unwrap();
-        let endpoint_node = self.graph.node(edge.node);
+        let node = self.node();
+        let edge = node.out_port(port).edge().unwrap();
+        let endpoint_node = &self.graph.node(edge.node);
         let in_port = endpoint_node.in_port(edge.port);
         let buffer = unsafe { in_port.data() };
         let converted_data = T::to_bytes(data)?;
@@ -189,7 +189,7 @@ impl<'a> NodeGuard<'a> {
      */
     pub fn read_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>, T::Error> {
         let n_bytes = n * mem::size_of::<T>();
-        let in_port = self.node.in_port(port);
+        let in_port = self.node().in_port(port);
         let buffer = unsafe { in_port.data() };
         if buffer.len() < n_bytes {
             panic!("cannot read n! check available first!");
@@ -236,7 +236,7 @@ impl<'a> NodeGuard<'a> {
         index: usize,
     ) -> Result<Vec<T>, T::Error> {
         let n_bytes = n * mem::size_of::<T>();
-        let in_port = self.node.in_port(port);
+        let in_port = self.node().in_port(port);
         let buffer = unsafe { in_port.data() };
         if buffer.len() - index < n_bytes {
             panic!("cannot read n! check available first!");
@@ -258,7 +258,7 @@ impl<'a> NodeGuard<'a> {
      * after skipping `index` bytes.
      */
     pub fn available_at<T: ByteConvertible>(&self, port: InPortID, index: usize) -> usize {
-        let in_port = self.node.in_port(port);
+        let in_port = self.node().in_port(port);
         let buffer = unsafe { in_port.data() };
         assert!(buffer.len() >= index);
         (buffer.len() - index) / mem::size_of::<T>()
@@ -269,8 +269,8 @@ impl<'a> NodeGuard<'a> {
      * output port.
      */
     pub fn buffered<T: ByteConvertible>(&self, port: OutPortID) -> usize {
-        let edge = self.node.out_port(port).edge().unwrap();
-        let endpoint_node = self.graph.node(edge.node);
+        let edge = self.node().out_port(port).edge().unwrap();
+        let endpoint_node = &self.graph.node(edge.node);
         let in_port = endpoint_node.in_port(edge.port);
         let buffer = unsafe { in_port.data() };
         buffer.len() / mem::size_of::<T>()
@@ -280,8 +280,8 @@ impl<'a> NodeGuard<'a> {
     /**
      * Gets the associated `Node`.
      */
-    pub fn node(&self) -> &Node {
-        self.node
+    pub fn node(&self) -> &Arc<Node> {
+        &self.node
     }
 
     /**
@@ -296,7 +296,7 @@ impl<'a> NodeGuard<'a> {
  * Holds the context needed for a node thread to read, write, and access the graph.
  */
 pub struct NodeContext {
-    id: NodeID,
+    node: Arc<Node>,
     graph: Arc<Graph>,
 }
 
@@ -305,14 +305,7 @@ impl NodeContext {
      * Lock the graph, returning a `NodeGuard` which can be used for interacting with other nodes.
      */
     pub fn lock<'a>(&'a self) -> NodeGuard<'a> {
-        NodeGuard::new(&*self.graph, self.id)
-    }
-
-    /**
-     * Gets the associated `Node`.
-     */
-    pub fn node<'a>(&'a self) -> &'a Node {
-        self.graph.node(self.id)
+        NodeGuard::new(&*self.graph, &self.node)
     }
 
     /**
@@ -322,11 +315,18 @@ impl NodeContext {
         use std::borrow::Borrow;
         self.graph.borrow()
     }
+
+    /**
+     * Gets the associated `Node`.
+     */
+    pub fn node<'a>(&'a self) -> &Arc<Node> {
+        &self.node
+    }
 }
 
 impl Drop for NodeContext {
     fn drop(&mut self) {
-        self.graph.node(self.id).detach_thread().unwrap();
+        self.node.detach_thread().unwrap();
     }
 }
 
@@ -354,11 +354,19 @@ impl Context {
      * Returns `Err` if this node is already attached to another thread.
      */
     pub fn node_ctx<'a>(&'a self, node: NodeID) -> Result<NodeContext, ()> {
-        self.graph.node(node).attach_thread().map(|_| {
+        let node = self.graph.node(node);
+        node.attach_thread().map(|_| {
             NodeContext {
                 graph: self.graph.clone(),
-                id: node,
+                node: node,
             }
         })
+    }
+
+    /**
+     * Gets the associated `Graph`.
+     */
+    pub fn graph(&self) -> &Graph {
+        &*self.graph
     }
 }
