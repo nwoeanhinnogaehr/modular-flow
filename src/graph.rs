@@ -26,6 +26,13 @@ impl Graph {
     }
 
     /**
+     * Gets the number of nodes in the graph.
+     */
+    pub fn num_nodes(&self) -> usize {
+        self.nodes.read().unwrap().len()
+    }
+
+    /**
      * Get a node by ID.
      */
     pub fn node(&self, id: NodeID) -> Arc<Node> {
