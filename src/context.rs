@@ -91,43 +91,6 @@ where
 {
 }
 
-pub struct DataFrame<T: ByteConvertible> {
-    pub data: Vec<T>,
-}
-
-impl<T: ByteConvertible> DataFrame<T> {
-    pub fn read(lock: &NodeGuard, port: InPortID) -> Vec<T> {
-        lock.wait(|lock| lock.available::<usize>(port) >= 1);
-        let len = lock.read_n::<usize>(port, 1).unwrap()[0];
-        lock.wait(|lock| lock.available::<T>(port) >= len);
-        lock.read_n::<T>(port, len).unwrap()
-    }
-
-    pub fn try_read(lock: &NodeGuard, port: InPortID) -> Option<Vec<T>> {
-        if lock.available::<usize>(port) < 1 {
-            return None;
-        }
-        let len = lock.peek_n::<usize>(port, 1).unwrap()[0];
-        if lock.available_at::<T>(port, mem::size_of::<usize>()) < len {
-            return None;
-        }
-        lock.read_n::<usize>(port, 1).unwrap();
-        Some(lock.read_n::<T>(port, len).unwrap())
-    }
-
-    pub fn write(lock: &NodeGuard, port: OutPortID, data: &[T]) {
-        lock.write(port, &[data.len()]).unwrap();
-        lock.write(port, &data).unwrap();
-    }
-}
-
-impl<T: ByteConvertible> Deref for DataFrame<T> {
-    type Target = Vec<T>;
-    fn deref(&self) -> &Vec<T> {
-        &self.data
-    }
-}
-
 /**
  * A `NodeGuard` holds a lock on the `Graph`, which prevents other threads from interacting with
  * the graph while this object is in scope (except if execution is in a call to `wait`; see below
