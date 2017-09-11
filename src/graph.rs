@@ -145,6 +145,42 @@ pub struct InPortID(pub usize);
 pub struct OutPortID(pub usize);
 
 /**
+ * A bunch of ports of a node that you can iterate over.
+ *
+ * Modifying the port structure of the node while iterating over the ports may throw an error at
+ * runtine.
+ */
+pub struct Ports<'a, P: Port + 'a> {
+    ports: &'a [P],
+}
+
+impl<'a, P: Port + 'a> Ports<'a, P> {
+    fn new(ports: &'a [P]) -> Self {
+        Ports {
+            ports
+        }
+    }
+    /// How many ports
+    pub fn len(&self) -> usize {
+        self.ports.len()
+    }
+    /// Iterate over the ports
+    // 'b is to untie struct lifetime from iterator lifetime
+    pub fn iter<'b>(&'b self) -> Box<Iterator<Item=&'a P> + 'a> {
+        Box::new(self.ports.iter())
+    }
+}
+
+impl<'a, P: Port + 'a> IntoIterator for Ports<'a, P> {
+    type Item = &'a P;
+    type IntoIter = Box<Iterator<Item=&'a P> + 'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(self.ports.into_iter())
+    }
+}
+
+/**
  * A node is a processing unit.
  *
  * It contains an ID, used as a global reference, a vector of input ports, and a vector of output
@@ -203,15 +239,15 @@ impl Node {
     /**
      * Returns an array containing all input ports of this node, indexed by id.
      */
-    pub fn in_ports(&self) -> &[InPort] {
-        &self.in_ports
+    pub fn in_ports(&self) -> Ports<InPort> {
+        Ports::new(&self.in_ports)
     }
 
     /**
      * Returns an array containing all output ports of this node, indexed by id.
      */
-    pub fn out_ports(&self) -> &[OutPort] {
-        &self.out_ports
+    pub fn out_ports(&self) -> Ports<OutPort> {
+        Ports::new(&self.out_ports)
     }
 
     /**
