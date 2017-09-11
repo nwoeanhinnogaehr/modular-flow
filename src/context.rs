@@ -6,7 +6,6 @@ use std::mem;
 use std::fmt;
 use std::ptr;
 use num_complex::Complex;
-use std::ops::Deref;
 use std::borrow::Borrow;
 
 /**
