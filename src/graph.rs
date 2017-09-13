@@ -145,42 +145,6 @@ pub struct InPortID(pub usize);
 pub struct OutPortID(pub usize);
 
 /**
- * A bunch of ports of a node that you can iterate over.
- *
- * Modifying the port structure of the node while iterating over the ports may throw an error at
- * runtine.
- */
-pub struct Ports<'a, P: Port + 'a> {
-    ports: &'a [P],
-}
-
-impl<'a, P: Port + 'a> Ports<'a, P> {
-    fn new(ports: &'a [P]) -> Self {
-        Ports {
-            ports
-        }
-    }
-    /// How many ports
-    pub fn len(&self) -> usize {
-        self.ports.len()
-    }
-    /// Iterate over the ports
-    // 'b is to untie struct lifetime from iterator lifetime
-    pub fn iter<'b>(&'b self) -> Box<Iterator<Item=&'a P> + 'a> {
-        Box::new(self.ports.iter())
-    }
-}
-
-impl<'a, P: Port + 'a> IntoIterator for Ports<'a, P> {
-    type Item = &'a P;
-    type IntoIter = Box<Iterator<Item=&'a P> + 'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        Box::new(self.ports.into_iter())
-    }
-}
-
-/**
  * A node is a processing unit.
  *
  * It contains an ID, used as a global reference, a vector of input ports, and a vector of output
@@ -188,8 +152,8 @@ impl<'a, P: Port + 'a> IntoIterator for Ports<'a, P> {
  */
 pub struct Node {
     id: NodeID,
-    in_ports: Vec<InPort>,
-    out_ports: Vec<OutPort>,
+    in_ports: RwLock<Vec<Arc<InPort>>>,
+    out_ports: RwLock<Vec<Arc<OutPort>>>,
     attached: AtomicBool,
 }
 
@@ -200,8 +164,8 @@ impl Node {
     pub(crate) fn new(id: NodeID, num_in: usize, num_out: usize) -> Node {
         Node {
             id,
-            in_ports: (0..num_in).map(|id| Port::new(InPortID(id), None)).collect(),
-            out_ports: (0..num_out).map(|id| Port::new(OutPortID(id), None)).collect(),
+            in_ports: RwLock::new((0..num_in).map(|id| Arc::new(Port::new(InPortID(id), None))).collect()),
+            out_ports: RwLock::new((0..num_out).map(|id| Arc::new(Port::new(OutPortID(id), None))).collect()),
             attached: AtomicBool::new(false),
         }
     }
@@ -210,14 +174,14 @@ impl Node {
      * Does this node have any input ports?
      */
     pub fn has_inputs(&self) -> bool {
-        !self.in_ports.is_empty()
+        !self.in_ports.read().unwrap().is_empty()
     }
 
     /**
      * Does this node have any output ports?
      */
     pub fn has_outputs(&self) -> bool {
-        !self.out_ports.is_empty()
+        !self.out_ports.read().unwrap().is_empty()
     }
 
     /**
@@ -239,29 +203,65 @@ impl Node {
     /**
      * Returns an array containing all input ports of this node, indexed by id.
      */
-    pub fn in_ports(&self) -> Ports<InPort> {
-        Ports::new(&self.in_ports)
+    pub fn in_ports(&self) -> Vec<Arc<InPort>> {
+        self.in_ports.read().unwrap().clone()
     }
 
     /**
      * Returns an array containing all output ports of this node, indexed by id.
      */
-    pub fn out_ports(&self) -> Ports<OutPort> {
-        Ports::new(&self.out_ports)
+    pub fn out_ports(&self) -> Vec<Arc<OutPort>> {
+        self.out_ports.read().unwrap().clone()
+    }
+
+    /**
+     * Pushes a new input port to the end of the port list.
+     */
+    pub fn push_in_port(&self) -> Arc<InPort> {
+        let mut ports = self.in_ports.write().unwrap();
+        let port = Arc::new(InPort::new(InPortID(ports.len()), None));
+        ports.push(port.clone());
+        port
+    }
+
+    /**
+     * Pushes a new output port to the end of the port list.
+     */
+    pub fn push_out_port(&self) -> Arc<OutPort> {
+        let mut ports = self.out_ports.write().unwrap();
+        let port = Arc::new(OutPort::new(OutPortID(ports.len()), None));
+        ports.push(port.clone());
+        port
+    }
+
+    /**
+     * Removes the input port from the end of the port list.
+     */
+    pub fn pop_in_port(&self) {
+        let mut ports = self.in_ports.write().unwrap();
+        ports.pop();
+    }
+
+    /**
+     * Removes the output port from the end of the port list.
+     */
+    pub fn pop_out_port(&self) {
+        let mut ports = self.out_ports.write().unwrap();
+        ports.pop();
     }
 
     /**
      * Gets an input port by id.
      */
-    pub fn in_port(&self, port_id: InPortID) -> &InPort {
-        &self.in_ports[port_id.0]
+    pub fn in_port(&self, port_id: InPortID) -> Arc<InPort> {
+        self.in_ports.read().unwrap()[port_id.0].clone()
     }
 
     /**
      * Gets an output port by id.
      */
-    pub fn out_port(&self, port_id: OutPortID) -> &OutPort {
-        &self.out_ports[port_id.0]
+    pub fn out_port(&self, port_id: OutPortID) -> Arc<OutPort> {
+        self.out_ports.read().unwrap()[port_id.0].clone()
     }
 
     /**
