@@ -373,6 +373,16 @@ pub trait Port {
      * Returns the ID associated with this port.
      */
     fn id(&self) -> Self::ID;
+
+    /**
+     * Returns the name of this port.
+     */
+    fn name(&self) -> String;
+
+    /**
+     * Sets the name of this port.
+     */
+    fn set_name(&self, name: String);
 }
 
 /**
@@ -383,6 +393,7 @@ pub struct InPort {
     edge: Mutex<Option<OutEdge>>,
     pub(crate) data: UnsafeCell<VecDeque<u8>>,
     id: InPortID,
+    name: Mutex<String>,
 }
 
 impl InPort {
@@ -402,6 +413,7 @@ impl Port for InPort {
             edge: Mutex::new(edge),
             data: UnsafeCell::new(VecDeque::new()),
             id,
+            name: Mutex::new("unnamed".into()),
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
@@ -412,6 +424,12 @@ impl Port for InPort {
     }
     fn id(&self) -> Self::ID {
         self.id
+    }
+    fn name(&self) -> String {
+        self.name.lock().unwrap().clone()
+    }
+    fn set_name(&self, name: String) {
+        *self.name.lock().unwrap() = name;
     }
 }
 
@@ -422,6 +440,7 @@ impl Port for InPort {
 pub struct OutPort {
     edge: Mutex<Option<InEdge>>,
     id: OutPortID,
+    name: Mutex<String>,
 }
 
 impl Port for OutPort {
@@ -431,6 +450,7 @@ impl Port for OutPort {
         OutPort {
             edge: Mutex::new(edge),
             id,
+            name: Mutex::new("unnamed".into()),
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
@@ -441,5 +461,11 @@ impl Port for OutPort {
     }
     fn id(&self) -> Self::ID {
         self.id
+    }
+    fn name(&self) -> String {
+        self.name.lock().unwrap().clone()
+    }
+    fn set_name(&self, name: String) {
+        *self.name.lock().unwrap() = name;
     }
 }
