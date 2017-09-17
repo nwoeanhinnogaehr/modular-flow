@@ -155,7 +155,6 @@ pub struct Node {
     in_ports: RwLock<Vec<Arc<InPort>>>,
     out_ports: RwLock<Vec<Arc<OutPort>>>,
     attached: AtomicBool,
-    locked: AtomicBool,
 }
 
 impl Node {
@@ -168,7 +167,6 @@ impl Node {
             in_ports: RwLock::new((0..num_in).map(|id| Arc::new(Port::new(InPortID(id), None))).collect()),
             out_ports: RwLock::new((0..num_out).map(|id| Arc::new(Port::new(OutPortID(id), None))).collect()),
             attached: AtomicBool::new(false),
-            locked: AtomicBool::new(false),
         }
     }
 
@@ -220,7 +218,6 @@ impl Node {
      * Pushes a new input port to the end of the port list.
      */
     pub fn push_in_port(&self) -> Arc<InPort> {
-        assert!(!self.port_lock());
         let mut ports = self.in_ports.write().unwrap();
         let port = Arc::new(InPort::new(InPortID(ports.len()), None));
         ports.push(port.clone());
@@ -231,7 +228,6 @@ impl Node {
      * Pushes a new output port to the end of the port list.
      */
     pub fn push_out_port(&self) -> Arc<OutPort> {
-        assert!(!self.port_lock());
         let mut ports = self.out_ports.write().unwrap();
         let port = Arc::new(OutPort::new(OutPortID(ports.len()), None));
         ports.push(port.clone());
@@ -242,7 +238,6 @@ impl Node {
      * Removes the input port from the end of the port list.
      */
     pub fn pop_in_port(&self) {
-        assert!(!self.port_lock());
         let mut ports = self.in_ports.write().unwrap();
         ports.pop();
     }
@@ -251,7 +246,6 @@ impl Node {
      * Removes the output port from the end of the port list.
      */
     pub fn pop_out_port(&self) {
-        assert!(!self.port_lock());
         let mut ports = self.out_ports.write().unwrap();
         ports.pop();
     }
@@ -290,21 +284,6 @@ impl Node {
         } else {
             Err(())
         }
-    }
-
-    /**
-     * Set the port lock state.
-     */
-    pub fn set_port_lock(&self, val: bool) {
-        self.locked.store(val, Ordering::Release);
-    }
-
-    /**
-     * Get the port lock state. When ports are locked, trying to add or remove ports will cause a
-     * panic.
-     */
-    pub fn port_lock(&self) -> bool {
-        self.locked.load(Ordering::Acquire)
     }
 }
 
