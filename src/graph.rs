@@ -35,8 +35,8 @@ impl Graph {
     /**
      * Get a node by ID.
      */
-    pub fn node(&self, id: NodeID) -> Arc<Node> {
-        self.nodes.read().unwrap()[id.0].clone()
+    pub fn node(&self, id: NodeID) -> Option<Arc<Node>> {
+        self.nodes.read().unwrap().get(id.0).cloned()
     }
 
     /**
@@ -63,9 +63,9 @@ impl Graph {
         dst_id: NodeID,
         dst_port: InPortID,
     ) -> Result<(), ()> {
-        let dst_node = self.node(dst_id);
+        let dst_node = self.node(dst_id).ok_or(())?;
         let in_port = dst_node.in_port(dst_port);
-        let src_node = self.node(src_id);
+        let src_node = self.node(src_id).ok_or(())?;
         let out_port = src_node.out_port(src_port);
         if in_port.has_edge() || out_port.has_edge() {
             Err(())
@@ -83,8 +83,8 @@ impl Graph {
      * counts.
      */
     pub fn connect_all(&self, src_id: NodeID, dst_id: NodeID) -> Result<(), ()> {
-        let n = self.node(src_id).out_ports().len();
-        if n != self.node(dst_id).in_ports().len() {
+        let n = self.node(src_id).ok_or(())?.out_ports().len();
+        if n != self.node(dst_id).ok_or(())?.in_ports().len() {
             return Err(());
         }
         for id in 0..n {
@@ -120,11 +120,11 @@ impl Graph {
      * Returns Err if the port is not connected.
      */
     pub fn disconnect(&self, node_id: NodeID, port_id: InPortID) -> Result<OutEdge, ()> {
-        let node = self.node(node_id);
+        let node = self.node(node_id).ok_or(())?;
         let in_port = node.in_port(port_id);
         if let Some(edge) = in_port.edge() {
             in_port.set_edge(None);
-            self.node(edge.node).out_port(edge.port).set_edge(None);
+            self.node(edge.node).ok_or(())?.out_port(edge.port).set_edge(None);
             Ok(edge)
         } else {
             Err(())
