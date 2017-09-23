@@ -64,9 +64,9 @@ impl Graph {
         dst_port: InPortID,
     ) -> Result<(), ()> {
         let dst_node = self.node(dst_id).ok_or(())?;
-        let in_port = dst_node.in_port(dst_port);
+        let in_port = dst_node.in_port(dst_port).ok_or(())?;
         let src_node = self.node(src_id).ok_or(())?;
-        let out_port = src_node.out_port(src_port);
+        let out_port = src_node.out_port(src_port).ok_or(())?;
         if in_port.has_edge() || out_port.has_edge() {
             Err(())
         } else {
@@ -121,10 +121,10 @@ impl Graph {
      */
     pub fn disconnect(&self, node_id: NodeID, port_id: InPortID) -> Result<OutEdge, ()> {
         let node = self.node(node_id).ok_or(())?;
-        let in_port = node.in_port(port_id);
+        let in_port = node.in_port(port_id).ok_or(())?;
         if let Some(edge) = in_port.edge() {
             in_port.set_edge(None);
-            self.node(edge.node).ok_or(())?.out_port(edge.port).set_edge(None);
+            self.node(edge.node).ok_or(())?.out_port(edge.port).ok_or(())?.set_edge(None);
             Ok(edge)
         } else {
             Err(())
@@ -253,15 +253,15 @@ impl Node {
     /**
      * Gets an input port by id.
      */
-    pub fn in_port(&self, port_id: InPortID) -> Arc<InPort> {
-        self.in_ports.read().unwrap()[port_id.0].clone()
+    pub fn in_port(&self, port_id: InPortID) -> Option<Arc<InPort>> {
+        self.in_ports.read().unwrap().get(port_id.0).cloned()
     }
 
     /**
      * Gets an output port by id.
      */
-    pub fn out_port(&self, port_id: OutPortID) -> Arc<OutPort> {
-        self.out_ports.read().unwrap()[port_id.0].clone()
+    pub fn out_port(&self, port_id: OutPortID) -> Option<Arc<OutPort>> {
+        self.out_ports.read().unwrap().get(port_id.0).cloned()
     }
 
     /**

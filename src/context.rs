@@ -109,15 +109,16 @@ impl<'a> NodeGuard<'a> {
      * another node. It is given an immutable reference to this `NodeGuard` as a parameter, which
      * can be used to check availability of data.
      */
-    pub fn wait<F>(&self, mut cond: F)
+    pub fn wait<F>(&self, mut cond: F) -> Result<(), ()>
     where
-        F: FnMut(&Self) -> bool,
+        F: FnMut(&Self) -> Result<bool, ()>,
     {
-        while !cond(self) {
+        while !cond(self)? {
             unsafe {
                 ptr::write(self.guard.get(), self.graph.cond.wait(ptr::read(self.guard.get())).unwrap());
             }
         }
+        Ok(())
     }
 
     /**
@@ -125,9 +126,9 @@ impl<'a> NodeGuard<'a> {
      */
     pub fn write<T: ByteConvertible>(&self, port: OutPortID, data: &[T]) -> Result<(), ()> {
         let node = self.node();
-        let edge = node.out_port(port).edge().unwrap();
+        let edge = node.out_port(port).ok_or(())?.edge().unwrap();
         let endpoint_node = &self.graph.node(edge.node).ok_or(())?;
-        let in_port = endpoint_node.in_port(edge.port);
+        let in_port = endpoint_node.in_port(edge.port).ok_or(())?;
         let buffer = unsafe { in_port.data() };
         let converted_data = T::to_bytes(data)?;
         buffer.extend(converted_data);
@@ -139,7 +140,7 @@ impl<'a> NodeGuard<'a> {
      * Read all available data from `port`.
      */
     pub fn read<T: ByteConvertible>(&self, port: InPortID) -> Result<Vec<T>, ()> {
-        let n = self.available::<T>(port);
+        let n = self.available::<T>(port)?;
         self.read_n(port, n)
     }
 
@@ -148,7 +149,7 @@ impl<'a> NodeGuard<'a> {
      */
     pub fn read_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>, ()> {
         let n_bytes = n * mem::size_of::<T>();
-        let in_port = self.node().in_port(port);
+        let in_port = self.node().in_port(port).ok_or(())?;
         let buffer = unsafe { in_port.data() };
         if buffer.len() < n_bytes {
             panic!("cannot read n! check available first!");
@@ -171,7 +172,7 @@ impl<'a> NodeGuard<'a> {
      * Panics if there are not enough bytes available to skip to `index`.
      */
     pub fn peek_at<T: ByteConvertible>(&self, port: InPortID, index: usize) -> Result<Vec<T>, ()> {
-        let n = self.available::<T>(port);
+        let n = self.available::<T>(port)?;
         assert!(n >= mem::size_of::<T>());
         self.peek_n_at(port, n - index * mem::size_of::<T>(), index)
     }
@@ -195,7 +196,7 @@ impl<'a> NodeGuard<'a> {
         index: usize,
     ) -> Result<Vec<T>, ()> {
         let n_bytes = n * mem::size_of::<T>();
-        let in_port = self.node().in_port(port);
+        let in_port = self.node().in_port(port).ok_or(())?;
         let buffer = unsafe { in_port.data() };
         if buffer.len() - index < n_bytes {
             panic!("cannot read n! check available first!");
@@ -208,7 +209,7 @@ impl<'a> NodeGuard<'a> {
     /**
      * Returns the number of bytes available to be read from the given input port.
      */
-    pub fn available<T: ByteConvertible>(&self, port: InPortID) -> usize {
+    pub fn available<T: ByteConvertible>(&self, port: InPortID) -> Result<usize, ()> {
         self.available_at::<T>(port, 0)
     }
 
@@ -216,11 +217,11 @@ impl<'a> NodeGuard<'a> {
      * Returns the number of objects of type `T` available to be read from the given input port,
      * after skipping `index` bytes.
      */
-    pub fn available_at<T: ByteConvertible>(&self, port: InPortID, index: usize) -> usize {
-        let in_port = self.node().in_port(port);
+    pub fn available_at<T: ByteConvertible>(&self, port: InPortID, index: usize) -> Result<usize, ()> {
+        let in_port = self.node().in_port(port).ok_or(())?;
         let buffer = unsafe { in_port.data() };
         assert!(buffer.len() >= index);
-        (buffer.len() - index) / mem::size_of::<T>()
+        Ok((buffer.len() - index) / mem::size_of::<T>())
     }
 
     /**
@@ -228,9 +229,9 @@ impl<'a> NodeGuard<'a> {
      * output port.
      */
     pub fn buffered<T: ByteConvertible>(&self, port: OutPortID) -> Result<usize, ()> {
-        let edge = self.node().out_port(port).edge().unwrap();
+        let edge = self.node().out_port(port).ok_or(())?.edge().unwrap();
         let endpoint_node = &self.graph.node(edge.node).ok_or(())?;
-        let in_port = endpoint_node.in_port(edge.port);
+        let in_port = endpoint_node.in_port(edge.port).ok_or(())?;
         let buffer = unsafe { in_port.data() };
         Ok(buffer.len() / mem::size_of::<T>())
     }
