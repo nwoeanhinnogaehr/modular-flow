@@ -3,6 +3,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
 use std::cell::UnsafeCell;
 
+#[derive(Debug)]
+pub enum Error {
+    InvalidNode,
+    InvalidPort,
+    Attached,
+    NotAttached,
+    NotConnected,
+    SizeMismatch,
+    Conversion,
+}
+
+pub type Result<T> = ::std::result::Result<T, Error>;
+
 /**
  * A graph contains many `Node`s and connections between their `Port`s.
  */
@@ -35,8 +48,8 @@ impl Graph {
     /**
      * Get a node by ID.
      */
-    pub fn node(&self, id: NodeID) -> Option<Arc<Node>> {
-        self.nodes.read().unwrap().get(id.0).cloned()
+    pub fn node(&self, id: NodeID) -> Result<Arc<Node>> {
+        self.nodes.read().unwrap().get(id.0).cloned().ok_or(Error::InvalidNode)
     }
 
     /**
@@ -62,13 +75,13 @@ impl Graph {
         src_port: OutPortID,
         dst_id: NodeID,
         dst_port: InPortID,
-    ) -> Result<(), ()> {
-        let dst_node = self.node(dst_id).ok_or(())?;
-        let in_port = dst_node.in_port(dst_port).ok_or(())?;
-        let src_node = self.node(src_id).ok_or(())?;
-        let out_port = src_node.out_port(src_port).ok_or(())?;
+    ) -> Result<()> {
+        let dst_node = self.node(dst_id)?;
+        let in_port = dst_node.in_port(dst_port)?;
+        let src_node = self.node(src_id)?;
+        let out_port = src_node.out_port(src_port)?;
         if in_port.has_edge() || out_port.has_edge() {
-            Err(())
+            Err(Error::NotConnected)
         } else {
             in_port.set_edge(Some(OutEdge::new(src_id, src_port)));
             out_port.set_edge(Some(InEdge::new(dst_id, dst_port)));
@@ -82,10 +95,10 @@ impl Graph {
      * Returns Err if any such ports are already connected, or if the nodes have different port
      * counts.
      */
-    pub fn connect_all(&self, src_id: NodeID, dst_id: NodeID) -> Result<(), ()> {
-        let n = self.node(src_id).ok_or(())?.out_ports().len();
-        if n != self.node(dst_id).ok_or(())?.in_ports().len() {
-            return Err(());
+    pub fn connect_all(&self, src_id: NodeID, dst_id: NodeID) -> Result<()> {
+        let n = self.node(src_id)?.out_ports().len();
+        if n != self.node(dst_id)?.in_ports().len() {
+            return Err(Error::SizeMismatch);
         }
         for id in 0..n {
             self.connect(src_id, OutPortID(id), dst_id, InPortID(id))?;
@@ -106,7 +119,7 @@ impl Graph {
         dst_id: NodeID,
         dst_port: InPortID,
         n: usize,
-    ) -> Result<(), ()> {
+    ) -> Result<()> {
         for id in 0..n {
             self.connect(src_id, OutPortID(src_port.0 + id), dst_id, InPortID(dst_port.0 + id))?;
         }
@@ -119,15 +132,15 @@ impl Graph {
      *
      * Returns Err if the port is not connected.
      */
-    pub fn disconnect(&self, node_id: NodeID, port_id: InPortID) -> Result<OutEdge, ()> {
-        let node = self.node(node_id).ok_or(())?;
-        let in_port = node.in_port(port_id).ok_or(())?;
+    pub fn disconnect(&self, node_id: NodeID, port_id: InPortID) -> Result<OutEdge> {
+        let node = self.node(node_id)?;
+        let in_port = node.in_port(port_id)?;
         if let Some(edge) = in_port.edge() {
             in_port.set_edge(None);
-            self.node(edge.node).ok_or(())?.out_port(edge.port).ok_or(())?.set_edge(None);
+            self.node(edge.node)?.out_port(edge.port)?.set_edge(None);
             Ok(edge)
         } else {
-            Err(())
+            Err(Error::NotConnected)
         }
     }
 }
@@ -253,15 +266,15 @@ impl Node {
     /**
      * Gets an input port by id.
      */
-    pub fn in_port(&self, port_id: InPortID) -> Option<Arc<InPort>> {
-        self.in_ports.read().unwrap().get(port_id.0).cloned()
+    pub fn in_port(&self, port_id: InPortID) -> Result<Arc<InPort>> {
+        self.in_ports.read().unwrap().get(port_id.0).cloned().ok_or(Error::InvalidPort)
     }
 
     /**
      * Gets an output port by id.
      */
-    pub fn out_port(&self, port_id: OutPortID) -> Option<Arc<OutPort>> {
-        self.out_ports.read().unwrap().get(port_id.0).cloned()
+    pub fn out_port(&self, port_id: OutPortID) -> Result<Arc<OutPort>> {
+        self.out_ports.read().unwrap().get(port_id.0).cloned().ok_or(Error::InvalidPort)
     }
 
     /**
@@ -271,18 +284,18 @@ impl Node {
         self.id
     }
 
-    pub(crate) fn attach_thread(&self) -> Result<(), ()> {
+    pub(crate) fn attach_thread(&self) -> Result<()> {
         if self.attached.compare_and_swap(false, true, Ordering::SeqCst) {
-            Err(())
+            Err(Error::Attached)
         } else {
             Ok(())
         }
     }
-    pub(crate) fn detach_thread(&self) -> Result<(), ()> {
+    pub(crate) fn detach_thread(&self) -> Result<()> {
         if self.attached.compare_and_swap(true, false, Ordering::SeqCst) {
             Ok(())
         } else {
-            Err(())
+            Err(Error::NotAttached)
         }
     }
 }

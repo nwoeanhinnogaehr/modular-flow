@@ -13,9 +13,9 @@ use std::borrow::Borrow;
  */
 pub trait ByteConvertible: Sized + Copy {
     /// Converts a slice of this into a vector of bytes, returning `None` on failure.
-    fn to_bytes(data: &[Self]) -> Result<Vec<u8>, ()>;
+    fn to_bytes(data: &[Self]) -> Result<Vec<u8>>;
     /// Converts a slice of bytes into a vector of this, returning `None` on failure.
-    fn from_bytes(data: &[u8]) -> Result<Vec<Self>, ()>;
+    fn from_bytes(data: &[u8]) -> Result<Vec<Self>>;
 }
 
 /**
@@ -26,7 +26,7 @@ pub unsafe trait TransmuteByteConvertible: Sized + Clone {
     /**
      * Always returns `Ok`.
      */
-    fn to_bytes(data: &[Self]) -> Result<Vec<u8>, ()> {
+    fn to_bytes(data: &[Self]) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         out.extend_from_slice(unsafe {
             slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() * mem::size_of::<Self>())
@@ -36,24 +36,24 @@ pub unsafe trait TransmuteByteConvertible: Sized + Clone {
     /**
      * Returns `Err` if the number of bytes given is not a multiple of the data size.
      */
-    fn from_bytes(data: &[u8]) -> Result<Vec<Self>, ()> {
+    fn from_bytes(data: &[u8]) -> Result<Vec<Self>> {
         let mut out = Vec::new();
         out.extend_from_slice(if data.len() % mem::size_of::<Self>() == 0 {
             unsafe {
                 slice::from_raw_parts(mem::transmute(data.as_ptr()), data.len() / mem::size_of::<Self>())
             }
         } else {
-            return Err(());
+            return Err(Error::Conversion);
         });
         Ok(out)
     }
 }
 
 impl<T: TransmuteByteConvertible + Copy> ByteConvertible for T {
-    fn to_bytes(data: &[Self]) -> Result<Vec<u8>, ()> {
+    fn to_bytes(data: &[Self]) -> Result<Vec<u8>> {
         <T as TransmuteByteConvertible>::to_bytes(data)
     }
-    fn from_bytes(data: &[u8]) -> Result<Vec<Self>, ()> {
+    fn from_bytes(data: &[u8]) -> Result<Vec<Self>> {
         <T as TransmuteByteConvertible>::from_bytes(data)
     }
 }
@@ -109,9 +109,9 @@ impl<'a> NodeGuard<'a> {
      * another node. It is given an immutable reference to this `NodeGuard` as a parameter, which
      * can be used to check availability of data.
      */
-    pub fn wait<F>(&self, mut cond: F) -> Result<(), ()>
+    pub fn wait<F>(&self, mut cond: F) -> Result<()>
     where
-        F: FnMut(&Self) -> Result<bool, ()>,
+        F: FnMut(&Self) -> Result<bool>,
     {
         while !cond(self)? {
             unsafe {
@@ -124,11 +124,11 @@ impl<'a> NodeGuard<'a> {
     /**
      * Write `data` to `port`.
      */
-    pub fn write<T: ByteConvertible>(&self, port: OutPortID, data: &[T]) -> Result<(), ()> {
+    pub fn write<T: ByteConvertible>(&self, port: OutPortID, data: &[T]) -> Result<()> {
         let node = self.node();
-        let edge = node.out_port(port).ok_or(())?.edge().unwrap();
-        let endpoint_node = &self.graph.node(edge.node).ok_or(())?;
-        let in_port = endpoint_node.in_port(edge.port).ok_or(())?;
+        let edge = node.out_port(port)?.edge().unwrap();
+        let endpoint_node = &self.graph.node(edge.node)?;
+        let in_port = endpoint_node.in_port(edge.port)?;
         let buffer = unsafe { in_port.data() };
         let converted_data = T::to_bytes(data)?;
         buffer.extend(converted_data);
@@ -139,7 +139,7 @@ impl<'a> NodeGuard<'a> {
     /**
      * Read all available data from `port`.
      */
-    pub fn read<T: ByteConvertible>(&self, port: InPortID) -> Result<Vec<T>, ()> {
+    pub fn read<T: ByteConvertible>(&self, port: InPortID) -> Result<Vec<T>> {
         let n = self.available::<T>(port)?;
         self.read_n(port, n)
     }
@@ -147,9 +147,9 @@ impl<'a> NodeGuard<'a> {
     /**
      * Read exactly `n` objects of type `T` from `port`. Panics if `n` objects are not available.
      */
-    pub fn read_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>, ()> {
+    pub fn read_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>> {
         let n_bytes = n * mem::size_of::<T>();
-        let in_port = self.node().in_port(port).ok_or(())?;
+        let in_port = self.node().in_port(port)?;
         let buffer = unsafe { in_port.data() };
         if buffer.len() < n_bytes {
             panic!("cannot read n! check available first!");
@@ -162,7 +162,7 @@ impl<'a> NodeGuard<'a> {
     /**
      * Read all available data from `port` without consuming it.
      */
-    pub fn peek<T: ByteConvertible>(&self, port: InPortID) -> Result<Vec<T>, ()> {
+    pub fn peek<T: ByteConvertible>(&self, port: InPortID) -> Result<Vec<T>> {
         self.peek_at(port, 0)
     }
 
@@ -171,7 +171,7 @@ impl<'a> NodeGuard<'a> {
      *
      * Panics if there are not enough bytes available to skip to `index`.
      */
-    pub fn peek_at<T: ByteConvertible>(&self, port: InPortID, index: usize) -> Result<Vec<T>, ()> {
+    pub fn peek_at<T: ByteConvertible>(&self, port: InPortID, index: usize) -> Result<Vec<T>> {
         let n = self.available::<T>(port)?;
         assert!(n >= mem::size_of::<T>());
         self.peek_n_at(port, n - index * mem::size_of::<T>(), index)
@@ -181,7 +181,7 @@ impl<'a> NodeGuard<'a> {
      * Read exactly `n` objects of type `T` from `port` without consuming it. Panics if `n` objects
      * of type `T` are not available starting at `index`.
      */
-    pub fn peek_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>, ()> {
+    pub fn peek_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>> {
         self.peek_n_at(port, n, 0)
     }
 
@@ -194,9 +194,9 @@ impl<'a> NodeGuard<'a> {
         port: InPortID,
         n: usize,
         index: usize,
-    ) -> Result<Vec<T>, ()> {
+    ) -> Result<Vec<T>> {
         let n_bytes = n * mem::size_of::<T>();
-        let in_port = self.node().in_port(port).ok_or(())?;
+        let in_port = self.node().in_port(port)?;
         let buffer = unsafe { in_port.data() };
         if buffer.len() - index < n_bytes {
             panic!("cannot read n! check available first!");
@@ -209,7 +209,7 @@ impl<'a> NodeGuard<'a> {
     /**
      * Returns the number of bytes available to be read from the given input port.
      */
-    pub fn available<T: ByteConvertible>(&self, port: InPortID) -> Result<usize, ()> {
+    pub fn available<T: ByteConvertible>(&self, port: InPortID) -> Result<usize> {
         self.available_at::<T>(port, 0)
     }
 
@@ -217,8 +217,8 @@ impl<'a> NodeGuard<'a> {
      * Returns the number of objects of type `T` available to be read from the given input port,
      * after skipping `index` bytes.
      */
-    pub fn available_at<T: ByteConvertible>(&self, port: InPortID, index: usize) -> Result<usize, ()> {
-        let in_port = self.node().in_port(port).ok_or(())?;
+    pub fn available_at<T: ByteConvertible>(&self, port: InPortID, index: usize) -> Result<usize> {
+        let in_port = self.node().in_port(port)?;
         let buffer = unsafe { in_port.data() };
         assert!(buffer.len() >= index);
         Ok((buffer.len() - index) / mem::size_of::<T>())
@@ -228,10 +228,10 @@ impl<'a> NodeGuard<'a> {
      * Returns the number of objects of type `T` buffered (i.e. waiting to be read) from the given
      * output port.
      */
-    pub fn buffered<T: ByteConvertible>(&self, port: OutPortID) -> Result<usize, ()> {
-        let edge = self.node().out_port(port).ok_or(())?.edge().unwrap();
-        let endpoint_node = &self.graph.node(edge.node).ok_or(())?;
-        let in_port = endpoint_node.in_port(edge.port).ok_or(())?;
+    pub fn buffered<T: ByteConvertible>(&self, port: OutPortID) -> Result<usize> {
+        let edge = self.node().out_port(port)?.edge().unwrap();
+        let endpoint_node = &self.graph.node(edge.node)?;
+        let in_port = endpoint_node.in_port(edge.port)?;
         let buffer = unsafe { in_port.data() };
         Ok(buffer.len() / mem::size_of::<T>())
     }
@@ -312,8 +312,8 @@ impl Context {
      *
      * Returns `Err` if this node is already attached to another thread.
      */
-    pub fn node_ctx<'a>(&'a self, node: NodeID) -> Result<NodeContext, ()> {
-        let node = self.graph.node(node).ok_or(())?;
+    pub fn node_ctx<'a>(&'a self, node: NodeID) -> Result<NodeContext> {
+        let node = self.graph.node(node)?;
         node.attach_thread().map(|_| {
             NodeContext {
                 graph: self.graph.clone(),
