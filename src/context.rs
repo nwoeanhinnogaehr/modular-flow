@@ -92,7 +92,7 @@ where
  * for more details).
  */
 pub struct NodeGuard<'a> {
-    node: &'a Node,
+    node: Arc<Node>,
     graph: &'a Graph,
     subs: Vec<Box<FnBox()>>,
 }
@@ -106,21 +106,16 @@ impl<'a> Drop for NodeGuard<'a> {
 }
 
 impl<'a> NodeGuard<'a> {
-    fn new(graph: &'a Graph, node: &'a Node, in_ports: &[Arc<InPort>], out_ports: &[Arc<OutPort>]) -> NodeGuard<'a> {
-        let mut subs = vec![];
+    fn new(graph: &'a Graph, node: Arc<Node>, in_ports: &[Arc<InPort>], out_ports: &[Arc<OutPort>]) -> NodeGuard<'a> {
+        let mut subs: Vec<Box<FnBox()>> = Vec::new();
         node.subscribe();
-        let arc_node = graph.node(node.id()).unwrap(); // ugh TODO
-        let unsub_node: Box<FnBox()> = Box::new(move || arc_node.unsubscribe());
-        subs.push(unsub_node);
-        for port in in_ports {
-            let port = port.clone();
-            let unsub: Box<FnBox()> = Box::new(move || port.unsubscribe());
-            subs.push(unsub);
+        let node_clone = node.clone();
+        subs.push(Box::new(move || node_clone.unsubscribe()));
+        for port in in_ports.iter().cloned() {
+            subs.push(Box::new(move || port.unsubscribe()));
         }
-        for port in out_ports {
-            let port = port.clone();
-            let unsub: Box<FnBox()> = Box::new(move || port.unsubscribe());
-            subs.push(unsub);
+        for port in out_ports.iter().cloned() {
+            subs.push(Box::new(move || port.unsubscribe()));
         }
         NodeGuard { node, graph, subs }
     }
@@ -291,7 +286,7 @@ impl<'a> NodeGuard<'a> {
      * Gets the associated `Node`.
      */
     pub fn node(&self) -> &Node {
-        self.node
+        &*self.node
     }
 
     /**
@@ -315,14 +310,14 @@ impl NodeContext {
      * Lock the graph, returning a `NodeGuard` which can be used for interacting with other nodes.
      */
     pub fn lock<'a>(&'a self, in_ports: &[Arc<InPort>], out_ports: &[Arc<OutPort>]) -> NodeGuard<'a> {
-        NodeGuard::new(self.graph(), self.node(), in_ports, out_ports)
+        NodeGuard::new(self.graph(), self.node.clone(), in_ports, out_ports)
     }
 
     /**
      * Lock all input and output ports.
      */
     pub fn lock_all<'a>(&'a self) -> NodeGuard<'a> {
-        NodeGuard::new(self.graph(), self.node(), &self.node().in_ports(), &self.node().out_ports())
+        NodeGuard::new(self.graph(), self.node.clone(), &self.node().in_ports(), &self.node().out_ports())
     }
 
     /**
