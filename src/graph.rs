@@ -304,9 +304,12 @@ impl Node {
         self.abort.load(Ordering::Acquire)
     }
 
-    pub fn subscribe<'a>(&'a self) -> Box<FnBox() + 'a> {
+    pub fn subscribe(&self) {
         self.subs.lock().unwrap().push(thread::current());
-        Box::new(move || self.subs.lock().unwrap().retain(|x| x.id() != thread::current().id()))
+    }
+
+    pub fn unsubscribe(&self) {
+        self.subs.lock().unwrap().retain(|x| x.id() != thread::current().id());
     }
 
     pub fn notify(&self) {
@@ -432,8 +435,12 @@ pub trait Port {
      * Subscribe to notifications on this port.
      * Calls to `notify` will call `unpark` on all subscribed threads.
      */
-    fn subscribe<'a>(&'a self) -> Box<FnBox() + 'a>;
+    fn subscribe(&self);
 
+    /**
+     * Unsubscribe from notifications on this port.
+     */
+    fn unsubscribe(&self);
 
     /**
      * `unpark`s all subscribed threads.
@@ -489,9 +496,11 @@ impl Port for InPort {
     fn set_name(&self, name: String) {
         *self.name.lock().unwrap() = name;
     }
-    fn subscribe<'a>(&'a self) -> Box<FnBox() + 'a> {
+    fn subscribe(&self) {
         self.subs.lock().unwrap().push(thread::current());
-        Box::new(move || self.subs.lock().unwrap().retain(|x| x.id() != thread::current().id()))
+    }
+    fn unsubscribe(&self) {
+        self.subs.lock().unwrap().retain(|x| x.id() != thread::current().id());
     }
     fn notify(&self) {
         for thr in self.subs.lock().unwrap().iter() {
@@ -539,9 +548,11 @@ impl Port for OutPort {
     fn set_name(&self, name: String) {
         *self.name.lock().unwrap() = name;
     }
-    fn subscribe<'a>(&'a self) -> Box<FnBox() + 'a> {
+    fn subscribe(&self) {
         self.subs.lock().unwrap().push(thread::current());
-        Box::new(move || self.subs.lock().unwrap().retain(|x| x.id() != thread::current().id()))
+    }
+    fn unsubscribe(&self) {
+        self.subs.lock().unwrap().retain(|x| x.id() != thread::current().id());
     }
     fn notify(&self) {
         for thr in self.subs.lock().unwrap().iter() {
