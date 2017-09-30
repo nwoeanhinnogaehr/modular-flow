@@ -2,7 +2,6 @@ use std::sync::{Mutex, MutexGuard, RwLock, Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
 use std::thread::{self, Thread};
-use std::boxed::FnBox;
 
 #[derive(Debug)]
 pub enum Error {
@@ -430,22 +429,6 @@ pub trait Port {
      * Sets the name of this port.
      */
     fn set_name(&self, name: String);
-
-    /**
-     * Subscribe to notifications on this port.
-     * Calls to `notify` will call `unpark` on all subscribed threads.
-     */
-    fn subscribe(&self);
-
-    /**
-     * Unsubscribe from notifications on this port.
-     */
-    fn unsubscribe(&self);
-
-    /**
-     * `unpark`s all subscribed threads.
-     */
-    fn notify(&self);
 }
 
 /**
@@ -457,7 +440,6 @@ pub struct InPort {
     pub(crate) data: Mutex<VecDeque<u8>>,
     id: InPortID,
     name: Mutex<String>,
-    subs: Mutex<Vec<Thread>>,
 }
 
 impl InPort {
@@ -478,7 +460,6 @@ impl Port for InPort {
             data: Mutex::new(VecDeque::new()),
             id,
             name: Mutex::new("unnamed".into()),
-            subs: Mutex::new(Vec::new()),
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
@@ -496,17 +477,6 @@ impl Port for InPort {
     fn set_name(&self, name: String) {
         *self.name.lock().unwrap() = name;
     }
-    fn subscribe(&self) {
-        self.subs.lock().unwrap().push(thread::current());
-    }
-    fn unsubscribe(&self) {
-        self.subs.lock().unwrap().retain(|x| x.id() != thread::current().id());
-    }
-    fn notify(&self) {
-        for thr in self.subs.lock().unwrap().iter() {
-            thr.unpark();
-        }
-    }
 }
 
 /**
@@ -517,7 +487,6 @@ pub struct OutPort {
     edge: Mutex<Option<InEdge>>,
     id: OutPortID,
     name: Mutex<String>,
-    subs: Mutex<Vec<Thread>>,
 }
 
 impl Port for OutPort {
@@ -528,7 +497,6 @@ impl Port for OutPort {
             edge: Mutex::new(edge),
             id,
             name: Mutex::new("unnamed".into()),
-            subs: Mutex::new(Vec::new()),
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
@@ -547,16 +515,5 @@ impl Port for OutPort {
     }
     fn set_name(&self, name: String) {
         *self.name.lock().unwrap() = name;
-    }
-    fn subscribe(&self) {
-        self.subs.lock().unwrap().push(thread::current());
-    }
-    fn unsubscribe(&self) {
-        self.subs.lock().unwrap().retain(|x| x.id() != thread::current().id());
-    }
-    fn notify(&self) {
-        for thr in self.subs.lock().unwrap().iter() {
-            thr.unpark();
-        }
     }
 }

@@ -112,10 +112,20 @@ impl<'a> NodeGuard<'a> {
         let node_clone = node.clone();
         subs.push(Box::new(move || node_clone.unsubscribe()));
         for port in in_ports.iter().cloned() {
-            subs.push(Box::new(move || port.unsubscribe()));
+            if let Some(edge) = port.edge() {
+                if let Ok(node) = graph.node(edge.node) {
+                    node.subscribe();
+                    subs.push(Box::new(move || node.unsubscribe()));
+                }
+            }
         }
         for port in out_ports.iter().cloned() {
-            subs.push(Box::new(move || port.unsubscribe()));
+            if let Some(edge) = port.edge() {
+                if let Ok(node) = graph.node(edge.node) {
+                    node.subscribe();
+                    subs.push(Box::new(move || node.unsubscribe()));
+                }
+            }
         }
         NodeGuard { node, graph, subs }
     }
@@ -165,8 +175,8 @@ impl<'a> NodeGuard<'a> {
         let mut buffer = in_port.data();
         let converted_data = T::to_bytes(data)?;
         buffer.extend(converted_data);
-        in_port.notify();
-        out_port.notify();
+        node.notify();
+        endpoint_node.notify();
         Ok(())
     }
 
@@ -182,19 +192,22 @@ impl<'a> NodeGuard<'a> {
      * Read exactly `n` objects of type `T` from `port`.
      */
     pub fn read_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>> {
+        let node = self.node();
         let n_bytes = n * mem::size_of::<T>();
-        let in_port = self.node().in_port(port)?;
-        let out_port = match in_port.edge() {
-            Some(edge) => self.node().out_port(edge.port)?,
+        let in_port = node.in_port(port)?;
+        let edge = match in_port.edge() {
+            Some(e) => e,
             None => return Err(Error::NotConnected),
         };
+        let endpoint_node = &self.graph.node(edge.node)?;
+        let _out_port = endpoint_node.out_port(edge.port)?;
         let mut buffer = in_port.data();
         if buffer.len() < n_bytes {
             return Err(Error::Unavailable);
         }
         let out: Vec<u8> = buffer.drain(..n_bytes).collect();
-        in_port.notify();
-        out_port.notify();
+        node.notify();
+        endpoint_node.notify();
         T::from_bytes(&out)
     }
 
