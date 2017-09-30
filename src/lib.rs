@@ -1,4 +1,4 @@
-#![warn(missing_docs)]
+#![feature(fnbox)]
 /*!
  * This is some kind of a library for dataflow computation. It's still very experimental and may
  * become something completely different in the end.

@@ -1,11 +1,11 @@
 use super::graph::*;
-use std::sync::{Arc, MutexGuard};
-use std::cell::UnsafeCell;
+use std::sync::Arc;
 use std::slice;
 use std::mem;
-use std::ptr;
 use num_complex::Complex;
 use std::borrow::Borrow;
+use std::thread;
+use std::boxed::FnBox;
 
 /**
  * An array of any type which is `ByteConvertible` can be converted to an array of bytes and back
@@ -94,13 +94,37 @@ where
 pub struct NodeGuard<'a> {
     node: &'a Node,
     graph: &'a Graph,
-    guard: UnsafeCell<MutexGuard<'a, ()>>,
+    in_ports: &'a [Arc<InPort>],
+    out_ports: &'a [Arc<OutPort>],
+    subs: Vec<Box<FnBox() + 'a>>,
+}
+
+impl<'a> Drop for NodeGuard<'a> {
+    fn drop(&mut self) {
+        for unsub in self.subs.drain(..) {
+            unsub();
+        }
+    }
 }
 
 impl<'a> NodeGuard<'a> {
-    fn new(graph: &'a Graph, node: &'a Node) -> NodeGuard<'a> {
-        let guard = UnsafeCell::new(graph.lock.lock().unwrap());
-        NodeGuard { node, graph, guard }
+    fn new(graph: &'a Graph, node: &'a Node, in_ports: &'a [Arc<InPort>], out_ports: &'a [Arc<OutPort>]) -> NodeGuard<'a> {
+        let mut subs = vec![];
+        subs.push(node.subscribe());
+        for port in in_ports {
+            subs.push(port.subscribe());
+        }
+        for port in out_ports {
+            subs.push(port.subscribe());
+        }
+        NodeGuard { node, graph, in_ports, out_ports, subs }
+    }
+
+    /**
+     * Block until the state of the locked data changes in some way.
+     */
+    pub fn sleep(&self) {
+        thread::park();
     }
 
     /**
@@ -113,10 +137,15 @@ impl<'a> NodeGuard<'a> {
     where
         F: FnMut(&Self) -> Result<bool>,
     {
-        while !cond(self)? {
-            unsafe {
-                ptr::write(self.guard.get(), self.graph.cond.wait(ptr::read(self.guard.get())).unwrap());
+        loop {
+            if self.node.aborting() {
+                self.node.set_aborting(false);
+                return Err(Error::Aborted);
             }
+            if cond(self)? {
+                 break;
+            }
+            thread::park();
         }
         Ok(())
     }
@@ -126,13 +155,18 @@ impl<'a> NodeGuard<'a> {
      */
     pub fn write<T: ByteConvertible>(&self, port: OutPortID, data: &[T]) -> Result<()> {
         let node = self.node();
-        let edge = node.out_port(port)?.edge().unwrap();
+        let out_port = node.out_port(port)?;
+        let edge = match out_port.edge() {
+            Some(e) => e,
+            None => return Err(Error::NotConnected),
+        };
         let endpoint_node = &self.graph.node(edge.node)?;
         let in_port = endpoint_node.in_port(edge.port)?;
-        let buffer = unsafe { in_port.data() };
+        let mut buffer = in_port.data();
         let converted_data = T::to_bytes(data)?;
         buffer.extend(converted_data);
-        self.graph.cond.notify_all();
+        in_port.notify();
+        out_port.notify();
         Ok(())
     }
 
@@ -145,17 +179,22 @@ impl<'a> NodeGuard<'a> {
     }
 
     /**
-     * Read exactly `n` objects of type `T` from `port`. Panics if `n` objects are not available.
+     * Read exactly `n` objects of type `T` from `port`.
      */
     pub fn read_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>> {
         let n_bytes = n * mem::size_of::<T>();
         let in_port = self.node().in_port(port)?;
-        let buffer = unsafe { in_port.data() };
+        let out_port = match in_port.edge() {
+            Some(edge) => self.node().out_port(edge.port)?,
+            None => return Err(Error::NotConnected),
+        };
+        let mut buffer = in_port.data();
         if buffer.len() < n_bytes {
-            panic!("cannot read n! check available first!");
+            return Err(Error::Unavailable);
         }
         let out: Vec<u8> = buffer.drain(..n_bytes).collect();
-        self.graph.cond.notify_all();
+        in_port.notify();
+        out_port.notify();
         T::from_bytes(&out)
     }
 
@@ -197,12 +236,11 @@ impl<'a> NodeGuard<'a> {
     ) -> Result<Vec<T>> {
         let n_bytes = n * mem::size_of::<T>();
         let in_port = self.node().in_port(port)?;
-        let buffer = unsafe { in_port.data() };
+        let buffer = in_port.data();
         if buffer.len() - index < n_bytes {
-            panic!("cannot read n! check available first!");
+            return Err(Error::Unavailable);
         }
         let out: Vec<u8> = buffer.iter().cloned().skip(index).take(n_bytes).collect();
-        self.graph.cond.notify_all();
         T::from_bytes(&out)
     }
 
@@ -219,7 +257,10 @@ impl<'a> NodeGuard<'a> {
      */
     pub fn available_at<T: ByteConvertible>(&self, port: InPortID, index: usize) -> Result<usize> {
         let in_port = self.node().in_port(port)?;
-        let buffer = unsafe { in_port.data() };
+        if in_port.edge().is_none() {
+            return Err(Error::NotConnected);
+        }
+        let buffer = in_port.data();
         assert!(buffer.len() >= index);
         Ok((buffer.len() - index) / mem::size_of::<T>())
     }
@@ -229,10 +270,14 @@ impl<'a> NodeGuard<'a> {
      * output port.
      */
     pub fn buffered<T: ByteConvertible>(&self, port: OutPortID) -> Result<usize> {
-        let edge = self.node().out_port(port)?.edge().unwrap();
+        let out_port = self.node().out_port(port)?;
+        let edge = match out_port.edge() {
+            Some(e) => e,
+            None => return Err(Error::NotConnected),
+        };
         let endpoint_node = &self.graph.node(edge.node)?;
         let in_port = endpoint_node.in_port(edge.port)?;
-        let buffer = unsafe { in_port.data() };
+        let buffer = in_port.data();
         Ok(buffer.len() / mem::size_of::<T>())
     }
     // read_while, peek, ...
@@ -264,8 +309,8 @@ impl NodeContext {
     /**
      * Lock the graph, returning a `NodeGuard` which can be used for interacting with other nodes.
      */
-    pub fn lock<'a>(&'a self) -> NodeGuard<'a> {
-        NodeGuard::new(self.graph(), self.node())
+    pub fn lock<'a>(&'a self, in_ports: &'a [Arc<InPort>], out_ports: &'a [Arc<OutPort>]) -> NodeGuard<'a> {
+        NodeGuard::new(self.graph(), self.node(), in_ports, out_ports)
     }
 
     /**

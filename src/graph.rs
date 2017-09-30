@@ -1,7 +1,8 @@
-use std::sync::{Condvar, Mutex, RwLock, Arc};
+use std::sync::{Mutex, MutexGuard, RwLock, Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
-use std::cell::UnsafeCell;
+use std::thread::{self, Thread};
+use std::boxed::FnBox;
 
 #[derive(Debug)]
 pub enum Error {
@@ -12,6 +13,8 @@ pub enum Error {
     NotConnected,
     SizeMismatch,
     Conversion,
+    Aborted,
+    Unavailable,
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
@@ -21,9 +24,6 @@ pub type Result<T> = ::std::result::Result<T, Error>;
  */
 pub struct Graph {
     nodes: RwLock<Vec<Arc<Node>>>,
-
-    pub(crate) cond: Condvar,
-    pub(crate) lock: Mutex<()>,
 }
 
 impl Graph {
@@ -33,8 +33,6 @@ impl Graph {
     pub fn new() -> Graph {
         Graph {
             nodes: RwLock::new(Vec::new()),
-            cond: Condvar::new(),
-            lock: Mutex::new(()),
         }
     }
 
@@ -143,6 +141,11 @@ impl Graph {
             Err(Error::NotConnected)
         }
     }
+
+    pub fn abort(&self, node_id: NodeID) -> Result<()> {
+        self.node(node_id)?.set_aborting(true);
+        Ok(())
+    }
 }
 
 /// A unique identifier of any `Node` in a specific `Graph`.
@@ -167,7 +170,9 @@ pub struct Node {
     id: NodeID,
     in_ports: RwLock<Vec<Arc<InPort>>>,
     out_ports: RwLock<Vec<Arc<OutPort>>>,
+    subs: Mutex<Vec<Thread>>,
     attached: AtomicBool,
+    abort: AtomicBool,
 }
 
 impl Node {
@@ -179,7 +184,9 @@ impl Node {
             id,
             in_ports: RwLock::new((0..num_in).map(|id| Arc::new(Port::new(InPortID(id), None))).collect()),
             out_ports: RwLock::new((0..num_out).map(|id| Arc::new(Port::new(OutPortID(id), None))).collect()),
+            subs: Mutex::new(Vec::new()),
             attached: AtomicBool::new(false),
+            abort: AtomicBool::new(false),
         }
     }
 
@@ -252,7 +259,9 @@ impl Node {
      */
     pub fn pop_in_port(&self) {
         let mut ports = self.in_ports.write().unwrap();
-        ports.pop();
+        if ports.pop().and_then(|port| port.edge()).is_some() {
+            panic!("disconnect before popping");
+        }
     }
 
     /**
@@ -260,7 +269,9 @@ impl Node {
      */
     pub fn pop_out_port(&self) {
         let mut ports = self.out_ports.write().unwrap();
-        ports.pop();
+        if ports.pop().and_then(|port| port.edge()).is_some() {
+            panic!("disconnect before popping");
+        }
     }
 
     /**
@@ -282,6 +293,26 @@ impl Node {
      */
     pub fn id(&self) -> NodeID {
         self.id
+    }
+
+    pub fn set_aborting(&self, abort: bool) {
+        self.abort.store(abort, Ordering::Release);
+        self.notify();
+    }
+
+    pub fn aborting(&self) -> bool {
+        self.abort.load(Ordering::Acquire)
+    }
+
+    pub fn subscribe<'a>(&'a self) -> Box<FnBox() + 'a> {
+        self.subs.lock().unwrap().push(thread::current());
+        Box::new(move || self.subs.lock().unwrap().retain(|x| x.id() != thread::current().id()))
+    }
+
+    pub fn notify(&self) {
+        for thr in self.subs.lock().unwrap().iter() {
+            thr.unpark();
+        }
     }
 
     pub(crate) fn attach_thread(&self) -> Result<()> {
@@ -396,6 +427,18 @@ pub trait Port {
      * Sets the name of this port.
      */
     fn set_name(&self, name: String);
+
+    /**
+     * Subscribe to notifications on this port.
+     * Calls to `notify` will call `unpark` on all subscribed threads.
+     */
+    fn subscribe<'a>(&'a self) -> Box<FnBox() + 'a>;
+
+
+    /**
+     * `unpark`s all subscribed threads.
+     */
+    fn notify(&self);
 }
 
 /**
@@ -404,15 +447,16 @@ pub trait Port {
 #[derive(Debug)]
 pub struct InPort {
     edge: Mutex<Option<OutEdge>>,
-    pub(crate) data: UnsafeCell<VecDeque<u8>>,
+    pub(crate) data: Mutex<VecDeque<u8>>,
     id: InPortID,
     name: Mutex<String>,
+    subs: Mutex<Vec<Thread>>,
 }
 
 impl InPort {
     /// Safe as long as you are holding the graph lock
-    pub(crate) unsafe fn data(&self) -> &mut VecDeque<u8> {
-        &mut *self.data.get()
+    pub(crate) fn data(&self) -> MutexGuard<VecDeque<u8>> {
+        self.data.lock().unwrap()
     }
 }
 unsafe impl Sync for InPort {}
@@ -424,9 +468,10 @@ impl Port for InPort {
     fn new(id: InPortID, edge: Option<OutEdge>) -> InPort {
         InPort {
             edge: Mutex::new(edge),
-            data: UnsafeCell::new(VecDeque::new()),
+            data: Mutex::new(VecDeque::new()),
             id,
             name: Mutex::new("unnamed".into()),
+            subs: Mutex::new(Vec::new()),
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
@@ -443,6 +488,15 @@ impl Port for InPort {
     }
     fn set_name(&self, name: String) {
         *self.name.lock().unwrap() = name;
+    }
+    fn subscribe<'a>(&'a self) -> Box<FnBox() + 'a> {
+        self.subs.lock().unwrap().push(thread::current());
+        Box::new(move || self.subs.lock().unwrap().retain(|x| x.id() != thread::current().id()))
+    }
+    fn notify(&self) {
+        for thr in self.subs.lock().unwrap().iter() {
+            thr.unpark();
+        }
     }
 }
 
@@ -454,6 +508,7 @@ pub struct OutPort {
     edge: Mutex<Option<InEdge>>,
     id: OutPortID,
     name: Mutex<String>,
+    subs: Mutex<Vec<Thread>>,
 }
 
 impl Port for OutPort {
@@ -464,6 +519,7 @@ impl Port for OutPort {
             edge: Mutex::new(edge),
             id,
             name: Mutex::new("unnamed".into()),
+            subs: Mutex::new(Vec::new()),
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
@@ -475,10 +531,21 @@ impl Port for OutPort {
     fn id(&self) -> Self::ID {
         self.id
     }
+
+    // this stuff is just copy paste from above, TODO factor
     fn name(&self) -> String {
         self.name.lock().unwrap().clone()
     }
     fn set_name(&self, name: String) {
         *self.name.lock().unwrap() = name;
+    }
+    fn subscribe<'a>(&'a self) -> Box<FnBox() + 'a> {
+        self.subs.lock().unwrap().push(thread::current());
+        Box::new(move || self.subs.lock().unwrap().retain(|x| x.id() != thread::current().id()))
+    }
+    fn notify(&self) {
+        for thr in self.subs.lock().unwrap().iter() {
+            thr.unpark();
+        }
     }
 }
