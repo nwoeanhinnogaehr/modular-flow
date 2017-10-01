@@ -1,4 +1,4 @@
-use std::sync::{Mutex, MutexGuard, RwLock, Arc};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
 use std::thread::{self, Thread};

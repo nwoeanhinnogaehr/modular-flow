@@ -106,7 +106,12 @@ impl<'a> Drop for NodeGuard<'a> {
 }
 
 impl<'a> NodeGuard<'a> {
-    fn new(graph: &'a Graph, node: Arc<Node>, in_ports: &[Arc<InPort>], out_ports: &[Arc<OutPort>]) -> NodeGuard<'a> {
+    fn new(
+        graph: &'a Graph,
+        node: Arc<Node>,
+        in_ports: &[Arc<InPort>],
+        out_ports: &[Arc<OutPort>],
+    ) -> NodeGuard<'a> {
         let mut subs: Vec<Box<FnBox()>> = Vec::new();
         node.subscribe();
         let node_clone = node.clone();
@@ -149,7 +154,7 @@ impl<'a> NodeGuard<'a> {
                 return Err(Error::Aborted);
             }
             if cond(self)? {
-                 break;
+                break;
             }
             thread::park();
         }
@@ -236,12 +241,7 @@ impl<'a> NodeGuard<'a> {
      * Read exactly `n` objects of type `T` from `port` without consuming it, starting after
      * `index` bytes. Panics if `n` objects of type `T` are not available starting at `index`.
      */
-    pub fn peek_n_at<T: ByteConvertible>(
-        &self,
-        port: InPortID,
-        n: usize,
-        index: usize,
-    ) -> Result<Vec<T>> {
+    pub fn peek_n_at<T: ByteConvertible>(&self, port: InPortID, n: usize, index: usize) -> Result<Vec<T>> {
         let n_bytes = n * mem::size_of::<T>();
         let in_port = self.node().in_port(port)?;
         let buffer = in_port.data();
