@@ -113,18 +113,14 @@ impl<'a> NodeGuard<'a> {
         subs.push(Box::new(move || node_clone.unsubscribe()));
         for port in in_ports.iter().cloned() {
             if let Some(edge) = port.edge() {
-                if let Ok(node) = graph.node(edge.node) {
-                    node.subscribe();
-                    subs.push(Box::new(move || node.unsubscribe()));
-                }
+                edge.node.subscribe();
+                subs.push(Box::new(move || edge.node.unsubscribe()));
             }
         }
         for port in out_ports.iter().cloned() {
             if let Some(edge) = port.edge() {
-                if let Ok(node) = graph.node(edge.node) {
-                    node.subscribe();
-                    subs.push(Box::new(move || node.unsubscribe()));
-                }
+                edge.node.subscribe();
+                subs.push(Box::new(move || edge.node.unsubscribe()));
             }
         }
         NodeGuard { node, graph, subs }
@@ -170,8 +166,8 @@ impl<'a> NodeGuard<'a> {
             Some(e) => e,
             None => return Err(Error::NotConnected),
         };
-        let endpoint_node = &self.graph.node(edge.node)?;
-        let in_port = endpoint_node.in_port(edge.port)?;
+        let endpoint_node = edge.node;
+        let in_port = edge.port;
         let mut buffer = in_port.data();
         let converted_data = T::to_bytes(data)?;
         buffer.extend(converted_data);
@@ -199,8 +195,7 @@ impl<'a> NodeGuard<'a> {
             Some(e) => e,
             None => return Err(Error::NotConnected),
         };
-        let endpoint_node = &self.graph.node(edge.node)?;
-        let _out_port = endpoint_node.out_port(edge.port)?;
+        let endpoint_node = edge.node;
         let mut buffer = in_port.data();
         if buffer.len() < n_bytes {
             return Err(Error::Unavailable);
@@ -288,8 +283,7 @@ impl<'a> NodeGuard<'a> {
             Some(e) => e,
             None => return Err(Error::NotConnected),
         };
-        let endpoint_node = &self.graph.node(edge.node)?;
-        let in_port = endpoint_node.in_port(edge.port)?;
+        let in_port = edge.port;
         let buffer = in_port.data();
         Ok(buffer.len() / mem::size_of::<T>())
     }

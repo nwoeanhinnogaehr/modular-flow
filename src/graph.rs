@@ -50,6 +50,13 @@ impl Graph {
     }
 
     /**
+     * Get a vector of all nodes.
+     */
+    pub fn nodes(&self) -> Vec<Arc<Node>> {
+        self.nodes.read().unwrap().clone()
+    }
+
+    /**
      * Add a node with a fixed number of input and output ports.
      * The ID of the newly created node is returned.
      */
@@ -80,8 +87,8 @@ impl Graph {
         if in_port.has_edge() || out_port.has_edge() {
             Err(Error::NotConnected)
         } else {
-            in_port.set_edge(Some(OutEdge::new(src_id, src_port)));
-            out_port.set_edge(Some(InEdge::new(dst_id, dst_port)));
+            in_port.set_edge(Some(OutEdge::new(src_node, out_port.clone())));
+            out_port.set_edge(Some(InEdge::new(dst_node, in_port)));
             Ok(())
         }
     }
@@ -123,24 +130,6 @@ impl Graph {
         Ok(())
     }
 
-    /**
-     * Disconnect an input port from the output port it is connected to, returning the edge that
-     * was removed.
-     *
-     * Returns Err if the port is not connected.
-     */
-    pub fn disconnect(&self, node_id: NodeID, port_id: InPortID) -> Result<OutEdge> {
-        let node = self.node(node_id)?;
-        let in_port = node.in_port(port_id)?;
-        if let Some(edge) = in_port.edge() {
-            in_port.set_edge(None);
-            self.node(edge.node)?.out_port(edge.port)?.set_edge(None);
-            Ok(edge)
-        } else {
-            Err(Error::NotConnected)
-        }
-    }
-
     pub fn abort(&self, node_id: NodeID) -> Result<()> {
         self.node(node_id)?.set_aborting(true);
         Ok(())
@@ -165,6 +154,7 @@ pub struct OutPortID(pub usize);
  * It contains an ID, used as a global reference, a vector of input ports, and a vector of output
  * ports.
  */
+#[derive(Debug)]
 pub struct Node {
     id: NodeID,
     in_ports: RwLock<Vec<Arc<InPort>>>,
@@ -258,9 +248,7 @@ impl Node {
      */
     pub fn pop_in_port(&self) {
         let mut ports = self.in_ports.write().unwrap();
-        if ports.pop().and_then(|port| port.edge()).is_some() {
-            panic!("disconnect before popping");
-        }
+        ports.pop().map(|port| port.disconnect());
     }
 
     /**
@@ -268,9 +256,7 @@ impl Node {
      */
     pub fn pop_out_port(&self) {
         let mut ports = self.out_ports.write().unwrap();
-        if ports.pop().and_then(|port| port.edge()).is_some() {
-            panic!("disconnect before popping");
-        }
+        ports.pop().map(|port| port.disconnect());
     }
 
     /**
@@ -352,16 +338,16 @@ pub enum NodeType {
  * An `InEdge` is like a vector pointing to a specific input port of a specific node, originating
  * from nowhere in particular.
  */
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct InEdge {
     /// Destination node
-    pub node: NodeID,
+    pub node: Arc<Node>,
     /// Destination port
-    pub port: InPortID,
+    pub port: Arc<InPort>,
 }
 impl InEdge {
     /// Construct a new `InEdge`
-    pub fn new(node: NodeID, port: InPortID) -> InEdge {
+    pub fn new(node: Arc<Node>, port: Arc<InPort>) -> InEdge {
         InEdge { node, port }
     }
 }
@@ -370,16 +356,16 @@ impl InEdge {
  * An `OutEdge` is like a vector pointing to a specific output port of a specific node, originating
  * from nowhere in particular.
  */
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct OutEdge {
     /// Destination node
-    pub node: NodeID,
+    pub node: Arc<Node>,
     /// Destination port
-    pub port: OutPortID,
+    pub port: Arc<OutPort>,
 }
 impl OutEdge {
     /// Construct a new `OutEdge`
-    pub fn new(node: NodeID, port: OutPortID) -> OutEdge {
+    pub fn new(node: Arc<Node>, port: Arc<OutPort>) -> OutEdge {
         OutEdge { node, port }
     }
 }
@@ -429,6 +415,11 @@ pub trait Port {
      * Sets the name of this port.
      */
     fn set_name(&self, name: String);
+
+    /**
+     * Disconnect this port if it's connected.
+     */
+    fn disconnect(&self) -> Result<()>;
 }
 
 /**
@@ -448,7 +439,6 @@ impl InPort {
         self.data.lock().unwrap()
     }
 }
-unsafe impl Sync for InPort {}
 
 impl Port for InPort {
     type ID = InPortID;
@@ -463,7 +453,7 @@ impl Port for InPort {
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
-        *self.edge.lock().unwrap()
+        self.edge.lock().unwrap().clone()
     }
     fn set_edge(&self, edge: Option<Self::Edge>) {
         *self.edge.lock().unwrap() = edge;
@@ -476,6 +466,15 @@ impl Port for InPort {
     }
     fn set_name(&self, name: String) {
         *self.name.lock().unwrap() = name;
+    }
+    fn disconnect(&self) -> Result<()> {
+        if let Some(edge) = self.edge() {
+            edge.port.set_edge(None);
+            self.set_edge(None);
+            Ok(())
+        } else {
+            Err(Error::NotConnected)
+        }
     }
 }
 
@@ -500,7 +499,7 @@ impl Port for OutPort {
         }
     }
     fn edge(&self) -> Option<Self::Edge> {
-        *self.edge.lock().unwrap()
+        self.edge.lock().unwrap().clone()
     }
     fn set_edge(&self, edge: Option<Self::Edge>) {
         *self.edge.lock().unwrap() = edge;
@@ -515,5 +514,14 @@ impl Port for OutPort {
     }
     fn set_name(&self, name: String) {
         *self.name.lock().unwrap() = name;
+    }
+    fn disconnect(&self) -> Result<()> {
+        if let Some(edge) = self.edge() {
+            edge.port.set_edge(None);
+            self.set_edge(None);
+            Ok(())
+        } else {
+            Err(Error::NotConnected)
+        }
     }
 }
