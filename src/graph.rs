@@ -74,6 +74,11 @@ impl Graph {
     pub fn remove_node(&self, id: NodeID) -> Result<()> {
         let mut nodes = self.nodes.write().unwrap();
         let pos = nodes.iter().position(|node| node.id() == id).ok_or(Error::InvalidNode)?;
+        {
+            let node = &nodes[pos];
+            node.clear_in_ports();
+            node.clear_out_ports();
+        }
         nodes.swap_remove(pos);
         Ok(())
     }
