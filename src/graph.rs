@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::collections::VecDeque;
 use std::thread::{self, Thread};
 
@@ -9,6 +9,7 @@ pub enum Error {
     InvalidPort,
     Attached,
     NotAttached,
+    Connected,
     NotConnected,
     SizeMismatch,
     Conversion,
@@ -22,6 +23,7 @@ pub type Result<T> = ::std::result::Result<T, Error>;
  * A graph contains many `Node`s and connections between their `Port`s.
  */
 pub struct Graph {
+    id_counter: AtomicUsize,
     nodes: RwLock<Vec<Arc<Node>>>,
 }
 
@@ -31,6 +33,7 @@ impl Graph {
      */
     pub fn new() -> Graph {
         Graph {
+            id_counter: AtomicUsize::new(0),
             nodes: RwLock::new(Vec::new()),
         }
     }
@@ -39,14 +42,15 @@ impl Graph {
      * Gets the number of nodes in the graph.
      */
     pub fn num_nodes(&self) -> usize {
-        self.nodes.read().unwrap().len()
+        self.nodes().len()
     }
 
     /**
      * Get a node by ID.
      */
     pub fn node(&self, id: NodeID) -> Result<Arc<Node>> {
-        self.nodes.read().unwrap().get(id.0).cloned().ok_or(Error::InvalidNode)
+        //TODO use a more appropriate data structure
+        self.nodes().iter().find(|node| node.id() == id).cloned().ok_or(Error::InvalidNode)
     }
 
     /**
@@ -62,9 +66,16 @@ impl Graph {
      */
     pub fn add_node(&self, num_in: usize, num_out: usize) -> NodeID {
         let mut nodes = self.nodes.write().unwrap();
-        let id = NodeID(nodes.len());
+        let id = NodeID(self.id_counter.fetch_add(1, Ordering::SeqCst));
         nodes.push(Arc::new(Node::new(id, num_in, num_out)));
         id
+    }
+
+    pub fn remove_node(&self, id: NodeID) -> Result<()> {
+        let mut nodes = self.nodes.write().unwrap();
+        let pos = nodes.iter().position(|node| node.id() == id).ok_or(Error::InvalidNode)?;
+        nodes.swap_remove(pos);
+        Ok(())
     }
 
     /**
@@ -85,7 +96,7 @@ impl Graph {
         let src_node = self.node(src_id)?;
         let out_port = src_node.out_port(src_port)?;
         if in_port.has_edge() || out_port.has_edge() {
-            Err(Error::NotConnected)
+            Err(Error::Connected)
         } else {
             in_port.set_edge(Some(OutEdge::new(src_node, out_port.clone())));
             out_port.set_edge(Some(InEdge::new(dst_node, in_port)));
@@ -129,11 +140,6 @@ impl Graph {
         }
         Ok(())
     }
-
-    pub fn abort(&self, node_id: NodeID) -> Result<()> {
-        self.node(node_id)?.set_aborting(true);
-        Ok(())
-    }
 }
 
 /// A unique identifier of any `Node` in a specific `Graph`.
@@ -162,6 +168,13 @@ pub struct Node {
     subs: Mutex<Vec<Thread>>,
     attached: AtomicBool,
     abort: AtomicBool,
+}
+
+impl Drop for Node {
+    fn drop(&mut self) {
+        self.clear_in_ports();
+        self.clear_out_ports();
+    }
 }
 
 impl Node {
@@ -259,6 +272,20 @@ impl Node {
         ports.pop().map(|port| port.disconnect());
     }
 
+    pub fn clear_out_ports(&self) {
+        let mut ports = self.out_ports.write().unwrap();
+        for port in ports.drain(..) {
+            let _ = port.disconnect();
+        }
+    }
+
+    pub fn clear_in_ports(&self) {
+        let mut ports = self.in_ports.write().unwrap();
+        for port in ports.drain(..) {
+            let _ = port.disconnect();
+        }
+    }
+
     /**
      * Gets an input port by id.
      */
@@ -294,7 +321,8 @@ impl Node {
     }
 
     pub fn unsubscribe(&self) {
-        self.subs.lock().unwrap().retain(|x| x.id() != thread::current().id());
+        let mut subs = self.subs.lock().unwrap();
+        subs.iter().position(|x| x.id() == thread::current().id()).map(|idx| subs.swap_remove(idx));
     }
 
     pub fn notify(&self) {
@@ -303,8 +331,13 @@ impl Node {
         }
     }
 
+    pub fn attached(&self) -> bool {
+        self.attached.load(Ordering::SeqCst)
+    }
+
     pub(crate) fn attach_thread(&self) -> Result<()> {
         if self.attached.compare_and_swap(false, true, Ordering::SeqCst) {
+            self.notify();
             Err(Error::Attached)
         } else {
             Ok(())
@@ -312,6 +345,7 @@ impl Node {
     }
     pub(crate) fn detach_thread(&self) -> Result<()> {
         if self.attached.compare_and_swap(true, false, Ordering::SeqCst) {
+            self.notify();
             Ok(())
         } else {
             Err(Error::NotAttached)
