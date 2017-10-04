@@ -2,6 +2,8 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::collections::VecDeque;
 use std::thread::{self, Thread};
+use serde::{Serialize, Serializer, Deserialize, Deserializer};
+use serde::ser::{SerializeStruct};
 
 #[derive(Debug)]
 pub enum Error {
@@ -25,6 +27,36 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 pub struct Graph {
     id_counter: AtomicUsize,
     nodes: RwLock<Vec<Arc<Node>>>,
+}
+
+impl Serialize for Graph {
+    fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
+        where S: Serializer
+    {
+        let mut graph = serializer.serialize_struct("Graph", 2)?;
+        graph.serialize_field("id_counter", &self.id_counter.load(Ordering::Acquire))?;
+        let nodes = self.nodes();
+        let nodes_brw: Vec<&Node> = nodes.iter().map(|x| &**x).collect();
+        graph.serialize_field("nodes", &nodes_brw)?;
+        graph.end()
+    }
+}
+impl<'de> Deserialize<'de> for Graph {
+    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+        where D: Deserializer<'de>
+    {
+        #[derive(Serialize, Deserialize)]
+        #[serde(rename="Graph")]
+        struct GraphMirror {
+            id_counter: u64,
+            nodes: Vec<Node>,
+        }
+        let mut mirror = GraphMirror::deserialize(deserializer)?;
+        let graph = Graph::new();
+        graph.id_counter.store(mirror.id_counter as usize, Ordering::Release);
+        *graph.nodes.write().unwrap() = mirror.nodes.drain(..).map(|node| Arc::new(node)).collect();
+        Ok(graph)
+    }
 }
 
 impl Graph {
@@ -74,12 +106,9 @@ impl Graph {
     pub fn remove_node(&self, id: NodeID) -> Result<()> {
         let mut nodes = self.nodes.write().unwrap();
         let pos = nodes.iter().position(|node| node.id() == id).ok_or(Error::InvalidNode)?;
-        {
-            let node = &nodes[pos];
-            node.clear_in_ports();
-            node.clear_out_ports();
-        }
-        nodes.swap_remove(pos);
+        let node = nodes.swap_remove(pos);
+        drop(nodes); // prevent deadlock because clear_ports also writes to nodes
+        node.clear_ports(self);
         Ok(())
     }
 
@@ -103,8 +132,8 @@ impl Graph {
         if in_port.has_edge() || out_port.has_edge() {
             Err(Error::Connected)
         } else {
-            in_port.set_edge(Some(OutEdge::new(src_node, out_port.clone())));
-            out_port.set_edge(Some(InEdge::new(dst_node, in_port)));
+            in_port.set_edge(Some(OutEdge::new(src_node.id(), out_port.id())));
+            out_port.set_edge(Some(InEdge::new(dst_node.id(), in_port.id())));
             Ok(())
         }
     }
@@ -148,15 +177,15 @@ impl Graph {
 }
 
 /// A unique identifier of any `Node` in a specific `Graph`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeID(pub usize);
 
 /// A unique identifier of any `InPort` in a specific `Node`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InPortID(pub usize);
 
 /// A unique identifier of any `OutPort` in a specific `Node`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutPortID(pub usize);
 
 /**
@@ -175,10 +204,37 @@ pub struct Node {
     abort: AtomicBool,
 }
 
-impl Drop for Node {
-    fn drop(&mut self) {
-        self.clear_in_ports();
-        self.clear_out_ports();
+impl Serialize for Node {
+    fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
+        where S: Serializer
+    {
+        let mut node = serializer.serialize_struct("Node", 3)?;
+        node.serialize_field("id", &self.id())?;
+        let ports = self.in_ports();
+        let ports_brw: Vec<&InPort> = ports.iter().map(|x| &**x).collect();
+        node.serialize_field("in_ports", &ports_brw)?;
+        let ports = self.out_ports();
+        let ports_brw: Vec<&OutPort> = ports.iter().map(|x| &**x).collect();
+        node.serialize_field("out_ports", &ports_brw)?;
+        node.end()
+    }
+}
+impl<'de> Deserialize<'de> for Node {
+    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+        where D: Deserializer<'de>
+    {
+        #[derive(Serialize, Deserialize)]
+        #[serde(rename="Node")]
+        struct NodeMirror {
+            id: NodeID,
+            in_ports: Vec<InPort>,
+            out_ports: Vec<OutPort>,
+        }
+        let mut mirror = NodeMirror::deserialize(deserializer)?;
+        let node = Node::new(mirror.id, 0, 0);
+        *node.in_ports.write().unwrap() = mirror.in_ports.drain(..).map(|port| Arc::new(port)).collect();
+        *node.out_ports.write().unwrap() = mirror.out_ports.drain(..).map(|port| Arc::new(port)).collect();
+        Ok(node)
     }
 }
 
@@ -264,30 +320,35 @@ impl Node {
     /**
      * Removes the input port from the end of the port list.
      */
-    pub fn pop_in_port(&self) {
+    pub fn pop_in_port(&self, graph: &Graph) {
         let mut ports = self.in_ports.write().unwrap();
-        ports.pop().map(|port| port.disconnect());
+        ports.pop().map(|port| port.disconnect(graph));
     }
 
     /**
      * Removes the output port from the end of the port list.
      */
-    pub fn pop_out_port(&self) {
+    pub fn pop_out_port(&self, graph: &Graph) {
         let mut ports = self.out_ports.write().unwrap();
-        ports.pop().map(|port| port.disconnect());
+        ports.pop().map(|port| port.disconnect(graph));
     }
 
-    pub fn clear_out_ports(&self) {
-        let mut ports = self.out_ports.write().unwrap();
-        for port in ports.drain(..) {
-            let _ = port.disconnect();
+    pub fn clear_ports(&self, graph: &Graph) {
+        {
+            let mut ports = self.out_ports.write().unwrap();
+            let old_ports: Vec<_> = ports.drain(..).collect();
+            drop(ports);
+            for port in old_ports {
+                let _ = port.disconnect(graph);
+            }
         }
-    }
-
-    pub fn clear_in_ports(&self) {
-        let mut ports = self.in_ports.write().unwrap();
-        for port in ports.drain(..) {
-            let _ = port.disconnect();
+        {
+            let mut ports = self.in_ports.write().unwrap();
+            let old_ports: Vec<_> = ports.drain(..).collect();
+            drop(ports);
+            for port in old_ports {
+                let _ = port.disconnect(graph);
+            }
         }
     }
 
@@ -377,16 +438,17 @@ pub enum NodeType {
  * An `InEdge` is like a vector pointing to a specific input port of a specific node, originating
  * from nowhere in particular.
  */
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InEdge {
     /// Destination node
-    pub node: Arc<Node>,
+    pub node: NodeID,
     /// Destination port
-    pub port: Arc<InPort>,
+    pub port: InPortID,
 }
+
 impl InEdge {
     /// Construct a new `InEdge`
-    pub fn new(node: Arc<Node>, port: Arc<InPort>) -> InEdge {
+    pub fn new(node: NodeID, port: InPortID) -> InEdge {
         InEdge { node, port }
     }
 }
@@ -395,16 +457,16 @@ impl InEdge {
  * An `OutEdge` is like a vector pointing to a specific output port of a specific node, originating
  * from nowhere in particular.
  */
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OutEdge {
     /// Destination node
-    pub node: Arc<Node>,
+    pub node: NodeID,
     /// Destination port
-    pub port: Arc<OutPort>,
+    pub port: OutPortID,
 }
 impl OutEdge {
     /// Construct a new `OutEdge`
-    pub fn new(node: Arc<Node>, port: Arc<OutPort>) -> OutEdge {
+    pub fn new(node: NodeID, port: OutPortID) -> OutEdge {
         OutEdge { node, port }
     }
 }
@@ -458,7 +520,7 @@ pub trait Port {
     /**
      * Disconnect this port if it's connected.
      */
-    fn disconnect(&self) -> Result<()>;
+    fn disconnect(&self, graph: &Graph) -> Result<()>;
 }
 
 /**
@@ -472,6 +534,34 @@ pub struct InPort {
     name: Mutex<String>,
 }
 
+impl Serialize for InPort {
+    fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
+        where S: Serializer
+    {
+        let mut port = serializer.serialize_struct("InPort", 3)?;
+        port.serialize_field("id", &self.id())?;
+        port.serialize_field("name", &self.name())?;
+        port.serialize_field("edge", &self.edge())?;
+        port.end()
+    }
+}
+impl<'de> Deserialize<'de> for InPort {
+    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+        where D: Deserializer<'de>
+    {
+        #[derive(Serialize, Deserialize)]
+        #[serde(rename="InPort")]
+        struct InPortMirror {
+            id: InPortID,
+            name: String,
+            edge: Option<OutEdge>,
+        }
+        let mirror = InPortMirror::deserialize(deserializer)?;
+        let port = InPort::new(mirror.id, mirror.edge);
+        port.set_name(mirror.name);
+        Ok(port)
+    }
+}
 impl InPort {
     /// Safe as long as you are holding the graph lock
     pub(crate) fn data(&self) -> MutexGuard<VecDeque<u8>> {
@@ -506,9 +596,9 @@ impl Port for InPort {
     fn set_name(&self, name: String) {
         *self.name.lock().unwrap() = name;
     }
-    fn disconnect(&self) -> Result<()> {
+    fn disconnect(&self, graph: &Graph) -> Result<()> {
         if let Some(edge) = self.edge() {
-            edge.port.set_edge(None);
+            graph.node(edge.node)?.out_port(edge.port)?.set_edge(None);
             self.set_edge(None);
             Ok(())
         } else {
@@ -525,6 +615,35 @@ pub struct OutPort {
     edge: Mutex<Option<InEdge>>,
     id: OutPortID,
     name: Mutex<String>,
+}
+
+impl Serialize for OutPort {
+    fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
+        where S: Serializer
+    {
+        let mut port = serializer.serialize_struct("OutPort", 3)?;
+        port.serialize_field("id", &self.id())?;
+        port.serialize_field("name", &self.name())?;
+        port.serialize_field("edge", &self.edge())?;
+        port.end()
+    }
+}
+impl<'de> Deserialize<'de> for OutPort {
+    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
+        where D: Deserializer<'de>
+    {
+        #[derive(Serialize, Deserialize)]
+        #[serde(rename="InPort")]
+        struct OutPortMirror {
+            id: OutPortID,
+            name: String,
+            edge: Option<InEdge>,
+        }
+        let mirror = OutPortMirror::deserialize(deserializer)?;
+        let port = OutPort::new(mirror.id, mirror.edge);
+        port.set_name(mirror.name);
+        Ok(port)
+    }
 }
 
 impl Port for OutPort {
@@ -554,9 +673,9 @@ impl Port for OutPort {
     fn set_name(&self, name: String) {
         *self.name.lock().unwrap() = name;
     }
-    fn disconnect(&self) -> Result<()> {
+    fn disconnect(&self, graph: &Graph) -> Result<()> {
         if let Some(edge) = self.edge() {
-            edge.port.set_edge(None);
+            graph.node(edge.node)?.in_port(edge.port)?.set_edge(None);
             self.set_edge(None);
             Ok(())
         } else {

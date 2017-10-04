@@ -9,6 +9,9 @@
  */
 
 extern crate num_complex;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
 
 /// Describes the data structure of the computation graph.
 pub mod graph;
