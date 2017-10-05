@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::collections::VecDeque;
 use std::thread::{self, Thread};
-use serde::{Serialize, Serializer, Deserialize, Deserializer};
-use serde::ser::{SerializeStruct};
+use serde::ser::Serialize;
+use serde::de::DeserializeOwned;
 
 #[derive(Debug)]
 pub enum Error {
@@ -24,39 +24,11 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 /**
  * A graph contains many `Node`s and connections between their `Port`s.
  */
+#[derive(Serialize, Deserialize)]
 pub struct Graph {
+    #[serde(skip)]
     id_counter: AtomicUsize,
     nodes: RwLock<Vec<Arc<Node>>>,
-}
-
-impl Serialize for Graph {
-    fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
-        where S: Serializer
-    {
-        let mut graph = serializer.serialize_struct("Graph", 2)?;
-        graph.serialize_field("id_counter", &self.id_counter.load(Ordering::Acquire))?;
-        let nodes = self.nodes();
-        let nodes_brw: Vec<&Node> = nodes.iter().map(|x| &**x).collect();
-        graph.serialize_field("nodes", &nodes_brw)?;
-        graph.end()
-    }
-}
-impl<'de> Deserialize<'de> for Graph {
-    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
-        where D: Deserializer<'de>
-    {
-        #[derive(Serialize, Deserialize)]
-        #[serde(rename="Graph")]
-        struct GraphMirror {
-            id_counter: u64,
-            nodes: Vec<Node>,
-        }
-        let mut mirror = GraphMirror::deserialize(deserializer)?;
-        let graph = Graph::new();
-        graph.id_counter.store(mirror.id_counter as usize, Ordering::Release);
-        *graph.nodes.write().unwrap() = mirror.nodes.drain(..).map(|node| Arc::new(node)).collect();
-        Ok(graph)
-    }
 }
 
 impl Graph {
@@ -132,8 +104,8 @@ impl Graph {
         if in_port.has_edge() || out_port.has_edge() {
             Err(Error::Connected)
         } else {
-            in_port.set_edge(Some(OutEdge::new(src_node.id(), out_port.id())));
-            out_port.set_edge(Some(InEdge::new(dst_node.id(), in_port.id())));
+            in_port.set_edge(Some(Edge::new(src_node.id(), out_port.id())));
+            out_port.set_edge(Some(Edge::new(dst_node.id(), in_port.id())));
             Ok(())
         }
     }
@@ -174,6 +146,25 @@ impl Graph {
         }
         Ok(())
     }
+
+    pub fn disconnect_in(&self, port: Arc<InPort>) -> Result<()> {
+        if let Some(edge) = port.edge() {
+            self.node(edge.node)?.out_port(edge.port)?.set_edge(None);
+            port.set_edge(None);
+            Ok(())
+        } else {
+            Err(Error::NotConnected)
+        }
+    }
+    pub fn disconnect_out(&self, port: Arc<OutPort>) -> Result<()> {
+        if let Some(edge) = port.edge() {
+            self.node(edge.node)?.in_port(edge.port)?.set_edge(None);
+            port.set_edge(None);
+            Ok(())
+        } else {
+            Err(Error::NotConnected)
+        }
+    }
 }
 
 /// A unique identifier of any `Node` in a specific `Graph`.
@@ -194,48 +185,17 @@ pub struct OutPortID(pub usize);
  * It contains an ID, used as a global reference, a vector of input ports, and a vector of output
  * ports.
  */
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Node {
     id: NodeID,
     in_ports: RwLock<Vec<Arc<InPort>>>,
     out_ports: RwLock<Vec<Arc<OutPort>>>,
+    #[serde(skip)]
     subs: Mutex<Vec<Thread>>,
+    #[serde(skip)]
     attached: AtomicBool,
+    #[serde(skip)]
     abort: AtomicBool,
-}
-
-impl Serialize for Node {
-    fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
-        where S: Serializer
-    {
-        let mut node = serializer.serialize_struct("Node", 3)?;
-        node.serialize_field("id", &self.id())?;
-        let ports = self.in_ports();
-        let ports_brw: Vec<&InPort> = ports.iter().map(|x| &**x).collect();
-        node.serialize_field("in_ports", &ports_brw)?;
-        let ports = self.out_ports();
-        let ports_brw: Vec<&OutPort> = ports.iter().map(|x| &**x).collect();
-        node.serialize_field("out_ports", &ports_brw)?;
-        node.end()
-    }
-}
-impl<'de> Deserialize<'de> for Node {
-    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
-        where D: Deserializer<'de>
-    {
-        #[derive(Serialize, Deserialize)]
-        #[serde(rename="Node")]
-        struct NodeMirror {
-            id: NodeID,
-            in_ports: Vec<InPort>,
-            out_ports: Vec<OutPort>,
-        }
-        let mut mirror = NodeMirror::deserialize(deserializer)?;
-        let node = Node::new(mirror.id, 0, 0);
-        *node.in_ports.write().unwrap() = mirror.in_ports.drain(..).map(|port| Arc::new(port)).collect();
-        *node.out_ports.write().unwrap() = mirror.out_ports.drain(..).map(|port| Arc::new(port)).collect();
-        Ok(node)
-    }
 }
 
 impl Node {
@@ -322,7 +282,7 @@ impl Node {
      */
     pub fn pop_in_port(&self, graph: &Graph) {
         let mut ports = self.in_ports.write().unwrap();
-        ports.pop().map(|port| port.disconnect(graph));
+        ports.pop().map(|port| graph.disconnect_in(port));
     }
 
     /**
@@ -330,7 +290,7 @@ impl Node {
      */
     pub fn pop_out_port(&self, graph: &Graph) {
         let mut ports = self.out_ports.write().unwrap();
-        ports.pop().map(|port| port.disconnect(graph));
+        ports.pop().map(|port| graph.disconnect_out(port));
     }
 
     pub fn clear_ports(&self, graph: &Graph) {
@@ -339,7 +299,7 @@ impl Node {
             let old_ports: Vec<_> = ports.drain(..).collect();
             drop(ports);
             for port in old_ports {
-                let _ = port.disconnect(graph);
+                let _ = graph.disconnect_out(port);
             }
         }
         {
@@ -347,7 +307,7 @@ impl Node {
             let old_ports: Vec<_> = ports.drain(..).collect();
             drop(ports);
             for port in old_ports {
-                let _ = port.disconnect(graph);
+                let _ = graph.disconnect_in(port);
             }
         }
     }
@@ -435,251 +395,112 @@ pub enum NodeType {
 }
 
 /**
- * An `InEdge` is like a vector pointing to a specific input port of a specific node, originating
+ * An `Edge` is like a vector pointing to a specific port of a specific node, originating
  * from nowhere in particular.
  */
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InEdge {
+pub struct Edge<ID: Copy + Clone> {
     /// Destination node
     pub node: NodeID,
     /// Destination port
-    pub port: InPortID,
+    pub port: ID,
 }
-
-impl InEdge {
-    /// Construct a new `InEdge`
-    pub fn new(node: NodeID, port: InPortID) -> InEdge {
-        InEdge { node, port }
+impl<ID: Copy + Clone> Edge<ID> {
+    /// Construct a new `Edge`
+    pub fn new(node: NodeID, port: ID) -> Self {
+        Edge { node, port }
     }
 }
 
-/**
- * An `OutEdge` is like a vector pointing to a specific output port of a specific node, originating
- * from nowhere in particular.
- */
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OutEdge {
-    /// Destination node
-    pub node: NodeID,
-    /// Destination port
-    pub port: OutPortID,
-}
-impl OutEdge {
-    /// Construct a new `OutEdge`
-    pub fn new(node: NodeID, port: OutPortID) -> OutEdge {
-        OutEdge { node, port }
-    }
+pub trait PortDetails : Default {
+    type ID : Copy + Clone + Serialize + DeserializeOwned;
+    type Edge : Clone + Serialize + DeserializeOwned;
 }
 
-/**
- * Generic interface for a port, implemented by both `InPort` and `OutPort`.
- */
-pub trait Port {
-    /// The associated port ID type.
-    type ID;
-    /// The associated edge type.
-    type Edge;
-
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Port<Details: PortDetails> {
+    id: Details::ID,
+    edge: Mutex<Option<Details::Edge>>,
+    name: Mutex<String>,
+    details: Details,
+}
+impl<Details: PortDetails> Port<Details> {
     /**
      * Construct a new port with a given ID and edge.
      */
-    fn new(Self::ID, Option<Self::Edge>) -> Self;
-
+    pub fn new(id: Details::ID, edge: Option<Details::Edge>) -> Self {
+        Port {
+            id,
+            edge: Mutex::new(edge),
+            name: Mutex::new("unnamed".into()),
+            details: Details::default(),
+        }
+    }
     /**
      * Get the edge currently associated with this port, if any.
      */
-    fn edge(&self) -> Option<Self::Edge>;
-
+    pub fn edge(&self) -> Option<Details::Edge> {
+        self.edge.lock().unwrap().clone()
+    }
     /**
      * Set the edge currently associated with this port.
      */
-    fn set_edge(&self, edge: Option<Self::Edge>);
-
+    pub fn set_edge(&self, edge: Option<Details::Edge>) {
+        *self.edge.lock().unwrap() = edge;
+    }
     /**
      * Returns true iff this port has an edge.
      */
     fn has_edge(&self) -> bool {
         self.edge().is_some()
     }
-
     /**
      * Returns the ID associated with this port.
      */
-    fn id(&self) -> Self::ID;
-
+    pub fn id(&self) -> Details::ID {
+        self.id
+    }
     /**
      * Returns the name of this port.
      */
-    fn name(&self) -> String;
-
+    pub fn name(&self) -> String {
+        self.name.lock().unwrap().clone()
+    }
     /**
      * Sets the name of this port.
      */
-    fn set_name(&self, name: String);
+    pub fn set_name(&self, name: String) {
+        *self.name.lock().unwrap() = name;
+    }
 
-    /**
-     * Disconnect this port if it's connected.
-     */
-    fn disconnect(&self, graph: &Graph) -> Result<()>;
+    pub(crate) fn details(&self) -> &Details {
+        &self.details
+    }
 }
 
-/**
- * An `InPort` can recieve data from a connected `OutPort`.
- */
-#[derive(Debug)]
-pub struct InPort {
-    edge: Mutex<Option<OutEdge>>,
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Input {
+    #[serde(skip)]
     pub(crate) data: Mutex<VecDeque<u8>>,
-    id: InPortID,
-    name: Mutex<String>,
 }
-
-impl Serialize for InPort {
-    fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
-        where S: Serializer
-    {
-        let mut port = serializer.serialize_struct("InPort", 3)?;
-        port.serialize_field("id", &self.id())?;
-        port.serialize_field("name", &self.name())?;
-        port.serialize_field("edge", &self.edge())?;
-        port.end()
-    }
+impl PortDetails for Input {
+    type ID = InPortID;
+    type Edge = Edge<OutPortID>;
 }
-impl<'de> Deserialize<'de> for InPort {
-    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
-        where D: Deserializer<'de>
-    {
-        #[derive(Serialize, Deserialize)]
-        #[serde(rename="InPort")]
-        struct InPortMirror {
-            id: InPortID,
-            name: String,
-            edge: Option<OutEdge>,
-        }
-        let mirror = InPortMirror::deserialize(deserializer)?;
-        let port = InPort::new(mirror.id, mirror.edge);
-        port.set_name(mirror.name);
-        Ok(port)
-    }
-}
-impl InPort {
-    /// Safe as long as you are holding the graph lock
+impl Input {
     pub(crate) fn data(&self) -> MutexGuard<VecDeque<u8>> {
         self.data.lock().unwrap()
     }
 }
 
-impl Port for InPort {
-    type ID = InPortID;
-    type Edge = OutEdge;
-
-    fn new(id: InPortID, edge: Option<OutEdge>) -> InPort {
-        InPort {
-            edge: Mutex::new(edge),
-            data: Mutex::new(VecDeque::new()),
-            id,
-            name: Mutex::new("unnamed".into()),
-        }
-    }
-    fn edge(&self) -> Option<Self::Edge> {
-        self.edge.lock().unwrap().clone()
-    }
-    fn set_edge(&self, edge: Option<Self::Edge>) {
-        *self.edge.lock().unwrap() = edge;
-    }
-    fn id(&self) -> Self::ID {
-        self.id
-    }
-    fn name(&self) -> String {
-        self.name.lock().unwrap().clone()
-    }
-    fn set_name(&self, name: String) {
-        *self.name.lock().unwrap() = name;
-    }
-    fn disconnect(&self, graph: &Graph) -> Result<()> {
-        if let Some(edge) = self.edge() {
-            graph.node(edge.node)?.out_port(edge.port)?.set_edge(None);
-            self.set_edge(None);
-            Ok(())
-        } else {
-            Err(Error::NotConnected)
-        }
-    }
-}
-
-/**
- * An `OutPort` can send data to a connected `InPort`.
- */
-#[derive(Debug)]
-pub struct OutPort {
-    edge: Mutex<Option<InEdge>>,
-    id: OutPortID,
-    name: Mutex<String>,
-}
-
-impl Serialize for OutPort {
-    fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
-        where S: Serializer
-    {
-        let mut port = serializer.serialize_struct("OutPort", 3)?;
-        port.serialize_field("id", &self.id())?;
-        port.serialize_field("name", &self.name())?;
-        port.serialize_field("edge", &self.edge())?;
-        port.end()
-    }
-}
-impl<'de> Deserialize<'de> for OutPort {
-    fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
-        where D: Deserializer<'de>
-    {
-        #[derive(Serialize, Deserialize)]
-        #[serde(rename="InPort")]
-        struct OutPortMirror {
-            id: OutPortID,
-            name: String,
-            edge: Option<InEdge>,
-        }
-        let mirror = OutPortMirror::deserialize(deserializer)?;
-        let port = OutPort::new(mirror.id, mirror.edge);
-        port.set_name(mirror.name);
-        Ok(port)
-    }
-}
-
-impl Port for OutPort {
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Output;
+impl PortDetails for Output {
     type ID = OutPortID;
-    type Edge = InEdge;
-    fn new(id: OutPortID, edge: Option<InEdge>) -> OutPort {
-        OutPort {
-            edge: Mutex::new(edge),
-            id,
-            name: Mutex::new("unnamed".into()),
-        }
-    }
-    fn edge(&self) -> Option<Self::Edge> {
-        self.edge.lock().unwrap().clone()
-    }
-    fn set_edge(&self, edge: Option<Self::Edge>) {
-        *self.edge.lock().unwrap() = edge;
-    }
-    fn id(&self) -> Self::ID {
-        self.id
-    }
-
-    // this stuff is just copy paste from above, TODO factor
-    fn name(&self) -> String {
-        self.name.lock().unwrap().clone()
-    }
-    fn set_name(&self, name: String) {
-        *self.name.lock().unwrap() = name;
-    }
-    fn disconnect(&self, graph: &Graph) -> Result<()> {
-        if let Some(edge) = self.edge() {
-            graph.node(edge.node)?.in_port(edge.port)?.set_edge(None);
-            self.set_edge(None);
-            Ok(())
-        } else {
-            Err(Error::NotConnected)
-        }
-    }
+    type Edge = Edge<InPortID>;
 }
+
+pub type InEdge = Edge<Input>;
+pub type OutEdge = Edge<Output>;
+pub type InPort = Port<Input>;
+pub type OutPort = Port<Output>;

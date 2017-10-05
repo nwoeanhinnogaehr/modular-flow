@@ -5,5 +5,8 @@ authors = ["Noah Weninger <nweninge@ualberta.ca>"]
 
 [dependencies]
 num-complex = "*"
-serde = "*"
 serde_derive = "*"
+
+[dependencies.serde]
+version = "*"
+features = ["rc"]

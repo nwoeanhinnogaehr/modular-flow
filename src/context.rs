@@ -177,7 +177,7 @@ impl<'a> NodeGuard<'a> {
         };
         let endpoint_node = self.graph.node(edge.node)?;
         let in_port = endpoint_node.in_port(edge.port)?;
-        let mut buffer = in_port.data();
+        let mut buffer = in_port.details().data();
         let converted_data = T::to_bytes(data)?;
         buffer.extend(converted_data);
         node.notify();
@@ -205,7 +205,7 @@ impl<'a> NodeGuard<'a> {
             None => return Err(Error::NotConnected),
         };
         let endpoint_node = self.graph.node(edge.node)?;
-        let mut buffer = in_port.data();
+        let mut buffer = in_port.details().data();
         if buffer.len() < n_bytes {
             return Err(Error::Unavailable);
         }
@@ -248,7 +248,7 @@ impl<'a> NodeGuard<'a> {
     pub fn peek_n_at<T: ByteConvertible>(&self, port: InPortID, n: usize, index: usize) -> Result<Vec<T>> {
         let n_bytes = n * mem::size_of::<T>();
         let in_port = self.node().in_port(port)?;
-        let buffer = in_port.data();
+        let buffer = in_port.details().data();
         if buffer.len() - index < n_bytes {
             return Err(Error::Unavailable);
         }
@@ -272,7 +272,7 @@ impl<'a> NodeGuard<'a> {
         if in_port.edge().is_none() {
             return Err(Error::NotConnected);
         }
-        let buffer = in_port.data();
+        let buffer = in_port.details().data();
         assert!(buffer.len() >= index);
         Ok((buffer.len() - index) / mem::size_of::<T>())
     }
@@ -289,7 +289,7 @@ impl<'a> NodeGuard<'a> {
         };
         let endpoint_node = self.graph.node(edge.node)?;
         let in_port = endpoint_node.in_port(edge.port)?;
-        let buffer = in_port.data();
+        let buffer = in_port.details().data();
         Ok(buffer.len() / mem::size_of::<T>())
     }
     // read_while, peek, ...
