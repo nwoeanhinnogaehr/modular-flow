@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
 use std::thread::{self, Thread};
 use serde::ser::Serialize;
@@ -26,8 +26,7 @@ pub type Result<T> = ::std::result::Result<T, Error>;
  */
 #[derive(Serialize, Deserialize)]
 pub struct Graph {
-    #[serde(skip)]
-    id_counter: AtomicUsize,
+    id_counter: Mutex<usize>,
     nodes: RwLock<Vec<Arc<Node>>>,
 }
 
@@ -37,7 +36,7 @@ impl Graph {
      */
     pub fn new() -> Graph {
         Graph {
-            id_counter: AtomicUsize::new(0),
+            id_counter: Mutex::new(0),
             nodes: RwLock::new(Vec::new()),
         }
     }
@@ -70,7 +69,9 @@ impl Graph {
      */
     pub fn add_node(&self, num_in: usize, num_out: usize) -> NodeID {
         let mut nodes = self.nodes.write().unwrap();
-        let id = NodeID(self.id_counter.fetch_add(1, Ordering::SeqCst));
+        let mut id_counter = self.id_counter.lock().unwrap();
+        let id = NodeID(*id_counter);
+        *id_counter += 1;
         nodes.push(Arc::new(Node::new(id, num_in, num_out)));
         id
     }
