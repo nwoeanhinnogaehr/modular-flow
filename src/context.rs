@@ -224,18 +224,17 @@ impl<'a> NodeGuard<'a> {
 
     /**
      * Read all available data from `port` without consuming it, starting after `index` bytes.
-     *
-     * Panics if there are not enough bytes available to skip to `index`.
      */
     pub fn peek_at<T: ByteConvertible>(&self, port: InPortID, index: usize) -> Result<Vec<T>> {
         let n = self.available::<T>(port)?;
-        assert!(n >= mem::size_of::<T>());
+        if n < mem::size_of::<T>() {
+            return Err(Error::Unavailable);
+        }
         self.peek_n_at(port, n - index * mem::size_of::<T>(), index)
     }
 
     /**
-     * Read exactly `n` objects of type `T` from `port` without consuming it. Panics if `n` objects
-     * of type `T` are not available starting at `index`.
+     * Read exactly `n` objects of type `T` from `port` without consuming it.
      */
     pub fn peek_n<T: ByteConvertible>(&self, port: InPortID, n: usize) -> Result<Vec<T>> {
         self.peek_n_at(port, n, 0)
@@ -243,7 +242,7 @@ impl<'a> NodeGuard<'a> {
 
     /**
      * Read exactly `n` objects of type `T` from `port` without consuming it, starting after
-     * `index` bytes. Panics if `n` objects of type `T` are not available starting at `index`.
+     * `index` bytes.
      */
     pub fn peek_n_at<T: ByteConvertible>(&self, port: InPortID, n: usize, index: usize) -> Result<Vec<T>> {
         let n_bytes = n * mem::size_of::<T>();
@@ -273,7 +272,9 @@ impl<'a> NodeGuard<'a> {
             return Err(Error::NotConnected);
         }
         let buffer = in_port.details().data();
-        assert!(buffer.len() >= index);
+        if buffer.len() < index {
+            return Err(Error::Unavailable);
+        }
         Ok((buffer.len() - index) / mem::size_of::<T>())
     }
 
