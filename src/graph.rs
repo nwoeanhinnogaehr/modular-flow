@@ -378,6 +378,15 @@ impl Node {
             Err(Error::NotAttached)
         }
     }
+
+    pub fn flush(&self) -> Result<()> {
+        self.attach_thread()?;
+        for port in self.in_ports() {
+            port.details().data().clear();
+        }
+        self.detach_thread()?;
+        Ok(())
+    }
 }
 
 /**
