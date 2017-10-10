@@ -433,7 +433,7 @@ impl<Details: PortDetails> Port<Details> {
         Port {
             id,
             edge: Mutex::new(edge),
-            name: Mutex::new("unnamed".into()),
+            name: Mutex::new("".into()),
             details: Details::default(),
         }
     }
