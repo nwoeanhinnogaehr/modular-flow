@@ -479,8 +479,8 @@ impl<Details: PortDetails> Port<Details> {
     /**
      * Sets the name of this port.
      */
-    pub fn set_name(&self, name: String) {
-        *self.name.lock().unwrap() = name;
+    pub fn set_name<S: Into<String>>(&self, name: S) {
+        *self.name.lock().unwrap() = name.into();
     }
 
     pub(crate) fn details(&self) -> &Details {
