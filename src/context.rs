@@ -177,11 +177,14 @@ impl<'a> NodeGuard<'a> {
         };
         let endpoint_node = self.graph.node(edge.node)?;
         let in_port = endpoint_node.in_port(edge.port)?;
-        let mut buffer = in_port.details().data();
         let converted_data = T::to_bytes(data)?;
-        buffer.extend(converted_data);
-        node.notify();
-        endpoint_node.notify();
+        if converted_data.len() > 0 {
+            let mut buffer = in_port.details().data();
+            buffer.extend(converted_data);
+            drop(buffer);
+            node.notify();
+            endpoint_node.notify();
+        }
         Ok(())
     }
 
@@ -210,8 +213,11 @@ impl<'a> NodeGuard<'a> {
             return Err(Error::Unavailable);
         }
         let out: Vec<u8> = buffer.drain(..n_bytes).collect();
-        node.notify();
-        endpoint_node.notify();
+        drop(buffer);
+        if out.len() > 0 {
+            node.notify();
+            endpoint_node.notify();
+        }
         T::from_bytes(&out)
     }
 
