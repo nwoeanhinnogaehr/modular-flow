@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, Condvar};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::VecDeque;
 use std::thread::{self, Thread};
@@ -24,7 +24,7 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 /**
  * A graph contains many `Node`s and connections between their `Port`s.
  */
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Graph {
     id_counter: Mutex<usize>,
     nodes: RwLock<Vec<Arc<Node>>>,
@@ -53,7 +53,7 @@ impl Graph {
      */
     pub fn node(&self, id: NodeID) -> Result<Arc<Node>> {
         //TODO use a more appropriate data structure
-        self.nodes().iter().find(|node| node.id() == id).cloned().ok_or(Error::InvalidNode)
+        self.nodes.read().unwrap().iter().find(|node| node.id() == id).cloned().ok_or(Error::InvalidNode)
     }
 
     /**
@@ -192,7 +192,9 @@ pub struct Node {
     in_ports: RwLock<Vec<Arc<InPort>>>,
     out_ports: RwLock<Vec<Arc<OutPort>>>,
     #[serde(skip)]
-    subs: Mutex<Vec<Thread>>,
+    pub(crate) lock: Mutex<()>,
+    #[serde(skip)]
+    pub(crate) cond: Condvar,
     #[serde(skip)]
     attached: AtomicBool,
     #[serde(skip)]
@@ -208,7 +210,8 @@ impl Node {
             id,
             in_ports: RwLock::new((0..num_in).map(|id| Arc::new(Port::new(InPortID(id), None))).collect()),
             out_ports: RwLock::new((0..num_out).map(|id| Arc::new(Port::new(OutPortID(id), None))).collect()),
-            subs: Mutex::new(Vec::new()),
+            lock: Mutex::new(()),
+            cond: Condvar::new(),
             attached: AtomicBool::new(false),
             abort: AtomicBool::new(false),
         }
@@ -334,27 +337,35 @@ impl Node {
         self.id
     }
 
-    pub fn set_aborting(&self, abort: bool) {
+    pub fn set_aborting(&self, abort: bool, graph: &Graph) {
         self.abort.store(abort, Ordering::Release);
-        self.notify();
+        self.notify(graph);
     }
 
     pub fn aborting(&self) -> bool {
         self.abort.load(Ordering::Acquire)
     }
 
-    pub fn subscribe(&self) {
-        self.subs.lock().unwrap().push(thread::current());
-    }
-
-    pub fn unsubscribe(&self) {
-        let mut subs = self.subs.lock().unwrap();
-        subs.iter().position(|x| x.id() == thread::current().id()).map(|idx| subs.swap_remove(idx));
-    }
-
-    pub fn notify(&self) {
-        for thr in self.subs.lock().unwrap().iter() {
-            thr.unpark();
+    pub fn notify(&self, graph: &Graph) {
+        self.cond.notify_all();
+        for port in self.in_ports() {
+            port.edge().map(|edge| {
+                let _ = graph.node(edge.node).map(|node| {
+                    if node.id() != self.id() {
+                        node.cond.notify_all();
+                    }
+                });
+            });
+        }
+        for port in self.out_ports() {
+            let _ = port.edge().map(|edge| {
+                let _ = graph.node(edge.node).map(|node| {
+                    if node.id() != self.id() {
+                        let _ = node.in_port(edge.port).map(|port| port.details().data().clear());
+                        node.cond.notify_all();
+                    }
+                });
+            });
         }
     }
 
@@ -362,29 +373,30 @@ impl Node {
         self.attached.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn attach_thread(&self) -> Result<()> {
+    pub(crate) fn attach_thread(&self, graph: &Graph) -> Result<()> {
         if self.attached.compare_and_swap(false, true, Ordering::SeqCst) {
-            self.notify();
+            self.notify(graph);
             Err(Error::Attached)
         } else {
             Ok(())
         }
     }
-    pub(crate) fn detach_thread(&self) -> Result<()> {
+    pub(crate) fn detach_thread(&self, graph: &Graph) -> Result<()> {
         if self.attached.compare_and_swap(true, false, Ordering::SeqCst) {
-            self.notify();
+            self.notify(graph);
             Ok(())
         } else {
             Err(Error::NotAttached)
         }
     }
 
-    pub fn flush(&self) -> Result<()> {
-        self.attach_thread()?;
+    pub fn flush(&self, graph: &Graph) -> Result<()> {
+        self.attach_thread(graph)?;
         for port in self.in_ports() {
             port.details().data().clear();
         }
-        self.detach_thread()?;
+        self.notify(graph);
+        self.detach_thread(graph)?;
         Ok(())
     }
 }

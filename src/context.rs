@@ -94,15 +94,6 @@ where
 pub struct NodeGuard<'a> {
     node: Arc<Node>,
     graph: &'a Graph,
-    subs: Vec<Box<FnBox()>>,
-}
-
-impl<'a> Drop for NodeGuard<'a> {
-    fn drop(&mut self) {
-        for unsub in self.subs.drain(..) {
-            unsub();
-        }
-    }
 }
 
 impl<'a> NodeGuard<'a> {
@@ -112,34 +103,15 @@ impl<'a> NodeGuard<'a> {
         in_ports: &[Arc<InPort>],
         out_ports: &[Arc<OutPort>],
     ) -> NodeGuard<'a> {
-        let mut subs: Vec<Box<FnBox()>> = Vec::new();
-        node.subscribe();
-        let node_clone = node.clone();
-        subs.push(Box::new(move || node_clone.unsubscribe()));
-        for port in in_ports.iter().cloned() {
-            if let Some(edge) = port.edge() {
-                if let Ok(node) = graph.node(edge.node) {
-                    node.subscribe();
-                    subs.push(Box::new(move || node.unsubscribe()));
-                }
-            }
-        }
-        for port in out_ports.iter().cloned() {
-            if let Some(edge) = port.edge() {
-                if let Ok(node) = graph.node(edge.node) {
-                    node.subscribe();
-                    subs.push(Box::new(move || node.unsubscribe()));
-                }
-            }
-        }
-        NodeGuard { node, graph, subs }
+        NodeGuard { node, graph }
     }
 
     /**
      * Block until the state of the locked data changes in some way.
      */
     pub fn sleep(&self) {
-        thread::park();
+        let lock = self.node.lock.lock().unwrap();
+        self.node.cond.wait(lock).unwrap();
     }
 
     /**
@@ -152,15 +124,16 @@ impl<'a> NodeGuard<'a> {
     where
         F: FnMut(&Self) -> Result<bool>,
     {
+        let mut lock = self.node.lock.lock().unwrap();
         loop {
             if self.node.aborting() {
-                self.node.set_aborting(false);
+                self.node.set_aborting(false, self.graph());
                 return Err(Error::Aborted);
             }
             if cond(self)? {
                 break;
             }
-            thread::park();
+            lock = self.node.cond.wait(lock).unwrap();
         }
         Ok(())
     }
@@ -182,8 +155,8 @@ impl<'a> NodeGuard<'a> {
             let mut buffer = in_port.details().data();
             buffer.extend(converted_data);
             drop(buffer);
-            node.notify();
-            endpoint_node.notify();
+            node.cond.notify_all();
+            endpoint_node.cond.notify_all();
         }
         Ok(())
     }
@@ -215,8 +188,8 @@ impl<'a> NodeGuard<'a> {
         let out: Vec<u8> = buffer.drain(..n_bytes).collect();
         drop(buffer);
         if out.len() > 0 {
-            node.notify();
-            endpoint_node.notify();
+            node.cond.notify_all();
+            endpoint_node.cond.notify_all();
         }
         T::from_bytes(&out)
     }
@@ -356,7 +329,7 @@ impl NodeContext {
 
 impl Drop for NodeContext {
     fn drop(&mut self) {
-        self.node.detach_thread().unwrap();
+        self.node.detach_thread(&*self.graph).unwrap();
     }
 }
 
@@ -385,7 +358,7 @@ impl Context {
      */
     pub fn node_ctx<'a>(&'a self, node: NodeID) -> Result<NodeContext> {
         let node = self.graph.node(node)?;
-        node.attach_thread().map(|_| {
+        node.attach_thread(&*self.graph).map(|_| {
             NodeContext {
                 graph: self.graph.clone(),
                 node: node,
