@@ -111,7 +111,7 @@ impl<'a> NodeGuard<'a> {
      */
     pub fn sleep(&self) {
         let lock = self.node.lock.lock().unwrap();
-        self.node.cond.wait(lock).unwrap();
+        let _ = self.node.cond.wait(lock).unwrap();
     }
 
     /**
@@ -127,9 +127,13 @@ impl<'a> NodeGuard<'a> {
         let mut lock = self.node.lock.lock().unwrap();
         loop {
             if self.node.aborting() {
+                drop(lock);
                 self.node.set_aborting(false, self.graph());
                 return Err(Error::Aborted);
             }
+            // TODO:
+            // if something in cond tries to notify or wait, we will deadlock.
+            // can probably provide a message in this case by careful tracking of threads
             if cond(self)? {
                 break;
             }
@@ -155,8 +159,8 @@ impl<'a> NodeGuard<'a> {
             let mut buffer = in_port.details().data();
             buffer.extend(converted_data);
             drop(buffer);
-            node.cond.notify_all();
-            endpoint_node.cond.notify_all();
+            node.notify_self();
+            endpoint_node.notify_self();
         }
         Ok(())
     }
@@ -188,8 +192,8 @@ impl<'a> NodeGuard<'a> {
         let out: Vec<u8> = buffer.drain(..n_bytes).collect();
         drop(buffer);
         if out.len() > 0 {
-            node.cond.notify_all();
-            endpoint_node.cond.notify_all();
+            node.notify_self();
+            endpoint_node.notify_self();
         }
         T::from_bytes(&out)
     }

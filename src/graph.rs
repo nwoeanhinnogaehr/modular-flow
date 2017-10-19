@@ -346,13 +346,18 @@ impl Node {
         self.abort.load(Ordering::Acquire)
     }
 
-    pub fn notify(&self, graph: &Graph) {
+    pub fn notify_self(&self) {
+        let _lock = self.lock.lock().unwrap();
         self.cond.notify_all();
+    }
+
+    pub fn notify(&self, graph: &Graph) {
+        self.notify_self();
         for port in self.in_ports() {
             port.edge().map(|edge| {
                 let _ = graph.node(edge.node).map(|node| {
                     if node.id() != self.id() {
-                        node.cond.notify_all();
+                        node.notify_self();
                     }
                 });
             });
@@ -362,7 +367,7 @@ impl Node {
                 let _ = graph.node(edge.node).map(|node| {
                     if node.id() != self.id() {
                         let _ = node.in_port(edge.port).map(|port| port.details().data().clear());
-                        node.cond.notify_all();
+                        node.notify_self();
                     }
                 });
             });
