@@ -153,13 +153,14 @@ impl Graph {
 
     pub fn disconnect_in(&self, port: Arc<InPort>) -> Result<()> {
         if let Some(edge) = port.edge() {
+            port.set_edge(None);
             let endpoint_node = self.node(edge.node)?;
             let endpoint_port = endpoint_node.out_port(edge.port)?;
-            let node = self.node(endpoint_port.edge().unwrap().node)?;
+            let old_edge = endpoint_port.edge();
             endpoint_port.set_edge(None);
-            port.set_edge(None);
-            node.notify_self();
             endpoint_node.notify_self();
+            let node = self.node(old_edge.unwrap().node)?;
+            node.notify_self();
             Ok(())
         } else {
             Err(Error::NotConnected)
@@ -167,13 +168,14 @@ impl Graph {
     }
     pub fn disconnect_out(&self, port: Arc<OutPort>) -> Result<()> {
         if let Some(edge) = port.edge() {
+            port.set_edge(None);
             let endpoint_node = self.node(edge.node)?;
             let endpoint_port = endpoint_node.in_port(edge.port)?;
-            let node = self.node(endpoint_port.edge().unwrap().node)?;
+            let old_edge = endpoint_port.edge();
             endpoint_port.set_edge(None);
-            port.set_edge(None);
-            node.notify_self();
             endpoint_node.notify_self();
+            let node = self.node(old_edge.unwrap().node)?;
+            node.notify_self();
             Ok(())
         } else {
             Err(Error::NotConnected)
