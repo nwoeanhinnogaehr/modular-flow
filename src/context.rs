@@ -128,14 +128,25 @@ impl<'a> NodeGuard<'a> {
         loop {
             if self.node.aborting() {
                 drop(lock);
-                self.node.set_aborting(false, self.graph());
+                self.node.set_aborting(false);
                 return Err(Error::Aborted);
             }
             // TODO:
             // if something in cond tries to notify or wait, we will deadlock.
             // can probably provide a message in this case by careful tracking of threads
-            if cond(self)? {
-                break;
+            match cond(self) {
+                Ok(true) => break,
+
+                Err(Error::Aborted) |
+                Err(Error::NotConnected) |
+                Err(Error::InvalidPort) |
+                Err(Error::InvalidNode) => break,
+
+                Err(Error::Connected) |
+                Err(Error::Attached) |
+                Err(Error::NotAttached) => panic!("should not be doing this stuff in the cond fn"),
+
+                _ => {}
             }
             lock = self.node.cond.wait(lock).unwrap();
         }

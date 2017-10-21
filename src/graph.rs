@@ -107,6 +107,9 @@ impl Graph {
         } else {
             in_port.set_edge(Some(Edge::new(src_node.id(), out_port.id())));
             out_port.set_edge(Some(Edge::new(dst_node.id(), in_port.id())));
+            in_port.details().data().clear();
+            src_node.notify_self();
+            dst_node.notify_self();
             Ok(())
         }
     }
@@ -150,8 +153,13 @@ impl Graph {
 
     pub fn disconnect_in(&self, port: Arc<InPort>) -> Result<()> {
         if let Some(edge) = port.edge() {
-            self.node(edge.node)?.out_port(edge.port)?.set_edge(None);
+            let endpoint_node = self.node(edge.node)?;
+            let endpoint_port = endpoint_node.out_port(edge.port)?;
+            let node = self.node(endpoint_port.edge().unwrap().node)?;
+            endpoint_port.set_edge(None);
             port.set_edge(None);
+            node.notify_self();
+            endpoint_node.notify_self();
             Ok(())
         } else {
             Err(Error::NotConnected)
@@ -159,8 +167,13 @@ impl Graph {
     }
     pub fn disconnect_out(&self, port: Arc<OutPort>) -> Result<()> {
         if let Some(edge) = port.edge() {
-            self.node(edge.node)?.in_port(edge.port)?.set_edge(None);
+            let endpoint_node = self.node(edge.node)?;
+            let endpoint_port = endpoint_node.in_port(edge.port)?;
+            let node = self.node(endpoint_port.edge().unwrap().node)?;
+            endpoint_port.set_edge(None);
             port.set_edge(None);
+            node.notify_self();
+            endpoint_node.notify_self();
             Ok(())
         } else {
             Err(Error::NotConnected)
@@ -337,9 +350,9 @@ impl Node {
         self.id
     }
 
-    pub fn set_aborting(&self, abort: bool, graph: &Graph) {
+    pub fn set_aborting(&self, abort: bool) {
         self.abort.store(abort, Ordering::Release);
-        self.notify(graph);
+        self.notify_self();
     }
 
     pub fn aborting(&self) -> bool {
@@ -395,14 +408,11 @@ impl Node {
         }
     }
 
-    pub fn flush(&self, graph: &Graph) -> Result<()> {
-        self.attach_thread(graph)?;
+    pub fn flush(&self, graph: &Graph) {
         for port in self.in_ports() {
             port.details().data().clear();
         }
         self.notify(graph);
-        self.detach_thread(graph)?;
-        Ok(())
     }
 }
 
