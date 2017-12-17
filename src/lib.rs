@@ -231,10 +231,10 @@ impl Interface {
         port.read_n(n)
     }
     pub fn add_port(&self, meta: MetaPort) -> Arc<Port> {
-        self.node.upgrade().unwrap().add_port(
-            &self.graph.upgrade().unwrap(),
-            meta,
-        )
+        self.node
+            .upgrade()
+            .unwrap()
+            .add_port(&self.graph.upgrade().unwrap(), meta)
     }
     pub fn remove_port(&self, port: PortId) -> Result<Arc<Port>, Error> {
         self.node.upgrade().unwrap().remove_port(port)
