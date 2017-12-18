@@ -20,10 +20,10 @@ use std::any::TypeId;
 use std::borrow::Cow;
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub struct NodeId(usize);
+pub struct NodeId(pub usize);
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub struct PortId(usize);
+pub struct PortId(pub usize);
 
 pub struct Graph {
     nodes: RwLock<HashMap<NodeId, Arc<Node>>>,
