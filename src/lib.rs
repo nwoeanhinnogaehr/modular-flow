@@ -45,7 +45,7 @@ impl Graph {
             meta: meta.clone(),
         };
         let node = Arc::new(node);
-        let module = (meta.new)(Interface::new(&self, &node));
+        let module = (meta.new)(Interface::new(self, &node));
         *node.module.lock().unwrap() = Some(module);
         self.nodes.write().unwrap().insert(node.id, node.clone());
         node
@@ -56,6 +56,9 @@ impl Graph {
             .unwrap()
             .remove(&node)
             .ok_or(Error::InvalidNode)
+    }
+    pub fn nodes(&self) -> Vec<Arc<Node>> {
+        self.nodes.read().unwrap().values().cloned().collect()
     }
 
     fn generate_id(&self) -> usize {
@@ -78,6 +81,9 @@ impl Node {
         self.module.lock().unwrap().as_mut().unwrap().start();
     }
     pub fn stop(&self) {
+        for port in self.ports() {
+            port.signal(Signal::Abort);
+        }
         self.module.lock().unwrap().as_mut().unwrap().stop();
     }
     pub fn find_port(&self, name: &'static str) -> Arc<Port> {
@@ -89,6 +95,9 @@ impl Node {
             .unwrap()
             .1
             .clone()
+    }
+    pub fn ports(&self) -> Vec<Arc<Port>> {
+        self.ports.read().unwrap().values().cloned().collect()
     }
 
     fn add_port(&self, graph: &Graph, meta: MetaPort) -> Arc<Port> {
@@ -145,6 +154,12 @@ impl Port {
         self.signal(Signal::Connect);
         other.signal(Signal::Connect);
     }
+    pub fn disconnect(self: Arc<Port>, other: Arc<Port>) {
+        self.set_edge(None);
+        other.set_edge(None);
+        self.signal(Signal::Disconnect);
+        other.signal(Signal::Disconnect);
+    }
 
     fn set_edge(&self, other: Option<&Arc<Port>>) {
         *self.edge.write().unwrap() = other.map(|x| Arc::downgrade(&x));
@@ -188,6 +203,9 @@ impl Port {
     fn read_n<T: 'static>(&self, n: usize) -> Result<Box<[T]>, Error> {
         assert!(self.meta.ty == TypeId::of::<T>());
         let mut buf = self.buffer.lock().unwrap();
+        if n > buf.len() {
+            return Err(Error::NotAvailable);
+        }
         let iter = buf.drain(..n);
         let out = iter.collect::<Vec<_>>().into();
         Ok(bytes_as_typed(out))
@@ -199,6 +217,7 @@ pub enum Error {
     NotConnected,
     InvalidNode,
     InvalidPort,
+    NotAvailable,
 }
 
 #[derive(Debug)]
@@ -206,6 +225,7 @@ pub enum Signal {
     Abort,
     Write,
     Connect,
+    Disconnect,
 }
 
 #[derive(Clone)]
