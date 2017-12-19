@@ -11,7 +11,7 @@
  * This is iteration #2.
  */
 
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock, Weak};
+use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::{HashMap, VecDeque};
 use std::mem;
@@ -38,16 +38,8 @@ impl<Module> Graph<Module> {
         })
     }
     pub fn add_node(self: &Arc<Graph<Module>>, meta: &MetaModule<Module>) -> Arc<Node<Module>> {
-        let node = Node {
-            id: NodeId(self.generate_id()),
-            ports: RwLock::new(HashMap::new()),
-            module: Mutex::new(None),
-            meta: MetaModule::clone(meta),
-        };
-        let node = Arc::new(node);
-        let module = (meta.new)(Interface::new(self, &node));
-        *node.module.lock().unwrap() = Some(module);
-        self.nodes.write().unwrap().insert(node.id, node.clone());
+        let node = Node::new(self, meta);
+        self.nodes.write().unwrap().insert(node.id(), node.clone());
         node
     }
     pub fn remove_node(&self, node: NodeId) -> Result<Arc<Node<Module>>, Error> {
@@ -67,23 +59,59 @@ impl<Module> Graph<Module> {
 }
 
 pub struct Node<Module> {
-    id: NodeId,
-    ports: RwLock<HashMap<PortId, Arc<Port>>>,
-    module: Mutex<Option<Module>>,
+    ifc: Arc<Interface<Module>>,
+    module: Module,
     meta: MetaModule<Module>,
 }
 
 impl<Module> Node<Module> {
-    pub fn id(&self) -> NodeId {
-        self.id
+    fn new(graph: &Arc<Graph<Module>>, meta: &MetaModule<Module>) -> Arc<Node<Module>> {
+        let ifc = Arc::new(Interface::new(graph));
+        let module = (meta.new)(ifc.clone());
+        Arc::new(Node {
+            ifc,
+            module,
+            meta: MetaModule::clone(meta),
+        })
     }
-    pub fn module(&self) -> MutexGuard<Option<Module>> {
-        self.module.lock().unwrap()
+
+    pub fn module(&self) -> &Module {
+        &self.module
     }
     pub fn meta(&self) -> &MetaModule<Module> {
         &self.meta
     }
+
+    pub fn id(&self) -> NodeId {
+        self.ifc.id()
+    }
     pub fn find_port(&self, name: &'static str) -> Arc<Port> {
+        self.ifc.find_port(name)
+    }
+    pub fn ports(&self) -> Vec<Arc<Port>> {
+        self.ifc.ports()
+    }
+}
+
+pub struct Interface<Module> {
+    id: NodeId,
+    ports: RwLock<HashMap<PortId, Arc<Port>>>,
+    graph: Weak<Graph<Module>>,
+}
+
+impl<Module> Interface<Module> {
+    fn new(graph: &Arc<Graph<Module>>) -> Interface<Module> {
+        Interface {
+            id: NodeId(graph.generate_id()),
+            ports: RwLock::new(HashMap::new()),
+            graph: Arc::downgrade(graph),
+        }
+    }
+
+    pub fn id(&self) -> NodeId {
+        self.id
+    }
+    pub fn find_port(&self, name: &str) -> Arc<Port> {
         self.ports
             .read()
             .unwrap()
@@ -96,26 +124,58 @@ impl<Module> Node<Module> {
     pub fn ports(&self) -> Vec<Arc<Port>> {
         self.ports.read().unwrap().values().cloned().collect()
     }
-
-    fn add_port(&self, graph: &Graph<Module>, meta: MetaPort) -> Arc<Port> {
-        let port = Port {
-            meta,
-            id: PortId(graph.generate_id()),
-            buffer: Mutex::new(VecDeque::new()),
-            edge: RwLock::new(None),
-            signal: Mutex::new(VecDeque::new()),
-            cvar: Condvar::new(),
-        };
-        let port = Arc::new(port);
+    pub fn add_port(&self, meta: &MetaPort) -> Arc<Port> {
+        let port = Port::new(&self.graph.upgrade().unwrap(), meta);
         self.ports.write().unwrap().insert(port.id, port.clone());
         port
     }
-    fn remove_port(&self, port: PortId) -> Result<Arc<Port>, Error> {
+    pub fn remove_port(&self, port: PortId) -> Result<Arc<Port>, Error> {
         self.ports
             .write()
             .unwrap()
             .remove(&port)
             .ok_or(Error::InvalidPort)
+    }
+
+    pub fn wait(&self, port: &Port) -> Signal {
+        port.wait()
+    }
+    pub fn poll(&self, port: &Port) -> Vec<Signal> {
+        port.poll()
+    }
+    pub fn write<T: 'static>(&self, port: &Port, data: impl Into<Box<[T]>>) -> Result<(), Error> {
+        port.write(data.into())
+    }
+    pub fn read<T: 'static>(&self, port: &Port) -> Result<Box<[T]>, Error> {
+        port.read()
+    }
+    pub fn read_n<T: 'static>(&self, port: &Port, n: usize) -> Result<Box<[T]>, Error> {
+        port.read_n(n)
+    }
+}
+
+pub struct MetaModule<Module> {
+    pub name: Cow<'static, str>,
+    pub new: fn(Arc<Interface<Module>>) -> Module,
+}
+
+impl<Module> MetaModule<Module> {
+    pub fn new(name: impl Into<Cow<'static, str>>,
+               new: fn(Arc<Interface<Module>>) -> Module)-> MetaModule<Module> {
+        MetaModule {
+            name: name.into(),
+            new,
+        }
+    }
+}
+
+// need manual impl because derive doesn't play nice with generics
+impl<T> Clone for MetaModule<T> {
+    fn clone(&self) -> Self {
+        MetaModule {
+            name: self.name.clone(),
+            new: self.new,
+        }
     }
 }
 
@@ -144,6 +204,20 @@ pub struct Port {
 }
 
 impl Port {
+    fn new<Module>(graph: &Graph<Module>, meta: &MetaPort) -> Arc<Port> {
+        Arc::new(Port {
+            meta: MetaPort::clone(meta),
+            id: PortId(graph.generate_id()),
+            buffer: Mutex::new(VecDeque::new()),
+            edge: RwLock::new(None),
+            signal: Mutex::new(VecDeque::new()),
+            cvar: Condvar::new(),
+        })
+    }
+
+    pub fn meta(&self) -> &MetaPort {
+        &self.meta
+    }
     pub fn connect(self: Arc<Port>, other: Arc<Port>) {
         assert!(self.meta.ty == other.meta.ty);
         self.set_edge(Some(&other));
@@ -181,9 +255,9 @@ impl Port {
         }
         lock.pop_front().unwrap()
     }
-    fn write<T: 'static>(&self, data: Box<[T]>) -> Result<(), Error> {
+    fn write<T: 'static>(&self, data: impl Into<Box<[T]>>) -> Result<(), Error> {
         assert!(self.meta.ty == TypeId::of::<T>());
-        let bytes = typed_as_bytes(data);
+        let bytes = typed_as_bytes(data.into());
         let other = self.edge().ok_or(Error::NotConnected)?;
         let mut buf = other.buffer.lock().unwrap();
         buf.extend(bytes.into_iter());
@@ -223,64 +297,6 @@ pub enum Signal {
     Write,
     Connect,
     Disconnect,
-}
-
-#[derive(Clone)]
-pub struct Interface<Module> {
-    graph: Weak<Graph<Module>>,
-    node: Weak<Node<Module>>,
-}
-
-impl<Module> Interface<Module> {
-    fn new(graph: &Arc<Graph<Module>>, node: &Arc<Node<Module>>) -> Interface<Module> {
-        Interface {
-            graph: Arc::downgrade(graph),
-            node: Arc::downgrade(node),
-        }
-    }
-    pub fn write<T: 'static>(&self, port: &Port, data: impl Into<Box<[T]>>) -> Result<(), Error> {
-        port.write(data.into())
-    }
-    pub fn read<T: 'static>(&self, port: &Port) -> Result<Box<[T]>, Error> {
-        port.read()
-    }
-    pub fn read_n<T: 'static>(&self, port: &Port, n: usize) -> Result<Box<[T]>, Error> {
-        port.read_n(n)
-    }
-    pub fn add_port(&self, meta: MetaPort) -> Arc<Port> {
-        self.node
-            .upgrade()
-            .unwrap()
-            .add_port(&self.graph.upgrade().unwrap(), meta)
-    }
-    pub fn remove_port(&self, port: PortId) -> Result<Arc<Port>, Error> {
-        self.node.upgrade().unwrap().remove_port(port)
-    }
-    pub fn find_port(&self, name: &'static str) -> Arc<Port> {
-        self.node.upgrade().unwrap().find_port(name)
-    }
-    pub fn wait(&self, port: &Port) -> Signal {
-        port.wait()
-    }
-    pub fn poll(&self, port: &Port) -> Vec<Signal> {
-        port.poll()
-    }
-}
-
-#[derive(Copy)]
-pub struct MetaModule<Module> {
-    pub id: &'static str,
-    pub new: fn(Interface<Module>) -> Module,
-}
-
-// need manual impl because derive doesn't play nice with generics
-impl<T> Clone for MetaModule<T> {
-    fn clone(&self) -> Self {
-        MetaModule {
-            id: self.id,
-            new: self.new,
-        }
-    }
 }
 
 fn typed_as_bytes<T: 'static>(data: Box<[T]>) -> Box<[u8]> {
