@@ -80,6 +80,9 @@ impl<Module> Node<Module> {
     pub fn module(&self) -> MutexGuard<Option<Module>> {
         self.module.lock().unwrap()
     }
+    pub fn meta(&self) -> &MetaModule<Module> {
+        &self.meta
+    }
     pub fn find_port(&self, name: &'static str) -> Arc<Port> {
         self.ports
             .read()
