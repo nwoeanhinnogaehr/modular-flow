@@ -11,7 +11,7 @@
  * This is iteration #2.
  */
 
-use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock, Weak};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::{HashMap, VecDeque};
 use std::mem;
@@ -25,24 +25,24 @@ pub struct NodeId(pub usize);
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct PortId(pub usize);
 
-pub struct Graph {
-    nodes: RwLock<HashMap<NodeId, Arc<Node>>>,
+pub struct Graph<Module> {
+    nodes: RwLock<HashMap<NodeId, Arc<Node<Module>>>>,
     id_counter: AtomicUsize,
 }
 
-impl Graph {
-    pub fn new() -> Graph {
-        Graph {
+impl<Module> Graph<Module> {
+    pub fn new() -> Arc<Graph<Module>> {
+        Arc::new(Graph {
             nodes: RwLock::new(HashMap::new()),
             id_counter: 0.into(),
-        }
+        })
     }
-    pub fn add_node(self: &Arc<Graph>, meta: &MetaModule) -> Arc<Node> {
+    pub fn add_node(self: &Arc<Graph<Module>>, meta: &MetaModule<Module>) -> Arc<Node<Module>> {
         let node = Node {
             id: NodeId(self.generate_id()),
             ports: RwLock::new(HashMap::new()),
             module: Mutex::new(None),
-            meta: meta.clone(),
+            meta: MetaModule::clone(meta),
         };
         let node = Arc::new(node);
         let module = (meta.new)(Interface::new(self, &node));
@@ -50,14 +50,14 @@ impl Graph {
         self.nodes.write().unwrap().insert(node.id, node.clone());
         node
     }
-    pub fn remove_node(&self, node: NodeId) -> Result<Arc<Node>, Error> {
+    pub fn remove_node(&self, node: NodeId) -> Result<Arc<Node<Module>>, Error> {
         self.nodes
             .write()
             .unwrap()
             .remove(&node)
             .ok_or(Error::InvalidNode)
     }
-    pub fn nodes(&self) -> Vec<Arc<Node>> {
+    pub fn nodes(&self) -> Vec<Arc<Node<Module>>> {
         self.nodes.read().unwrap().values().cloned().collect()
     }
 
@@ -66,25 +66,19 @@ impl Graph {
     }
 }
 
-pub struct Node {
+pub struct Node<Module> {
     id: NodeId,
     ports: RwLock<HashMap<PortId, Arc<Port>>>,
-    module: Mutex<Option<Box<Module>>>,
-    meta: MetaModule,
+    module: Mutex<Option<Module>>,
+    meta: MetaModule<Module>,
 }
 
-impl Node {
+impl<Module> Node<Module> {
     pub fn id(&self) -> NodeId {
         self.id
     }
-    pub fn start(&self) {
-        self.module.lock().unwrap().as_mut().unwrap().start();
-    }
-    pub fn stop(&self) {
-        for port in self.ports() {
-            port.signal(Signal::Abort);
-        }
-        self.module.lock().unwrap().as_mut().unwrap().stop();
+    pub fn module(&self) -> MutexGuard<Option<Module>> {
+        self.module.lock().unwrap()
     }
     pub fn find_port(&self, name: &'static str) -> Arc<Port> {
         self.ports
@@ -100,7 +94,7 @@ impl Node {
         self.ports.read().unwrap().values().cloned().collect()
     }
 
-    fn add_port(&self, graph: &Graph, meta: MetaPort) -> Arc<Port> {
+    fn add_port(&self, graph: &Graph<Module>, meta: MetaPort) -> Arc<Port> {
         let port = Port {
             meta,
             id: PortId(graph.generate_id()),
@@ -229,13 +223,13 @@ pub enum Signal {
 }
 
 #[derive(Clone)]
-pub struct Interface {
-    graph: Weak<Graph>,
-    node: Weak<Node>,
+pub struct Interface<Module> {
+    graph: Weak<Graph<Module>>,
+    node: Weak<Node<Module>>,
 }
 
-impl Interface {
-    fn new(graph: &Arc<Graph>, node: &Arc<Node>) -> Interface {
+impl<Module> Interface<Module> {
+    fn new(graph: &Arc<Graph<Module>>, node: &Arc<Node<Module>>) -> Interface<Module> {
         Interface {
             graph: Arc::downgrade(graph),
             node: Arc::downgrade(node),
@@ -270,15 +264,20 @@ impl Interface {
     }
 }
 
-#[derive(Clone)]
-pub struct MetaModule {
-    id: &'static str,
-    new: fn(Interface) -> Box<Module>,
+#[derive(Copy)]
+pub struct MetaModule<Module> {
+    pub id: &'static str,
+    pub new: fn(Interface<Module>) -> Module,
 }
 
-pub trait Module: Send + Sync {
-    fn start(&mut self);
-    fn stop(&mut self);
+// need manual impl because derive doesn't play nice with generics
+impl<T> Clone for MetaModule<T> {
+    fn clone(&self) -> Self {
+        MetaModule {
+            id: self.id,
+            new: self.new,
+        }
+    }
 }
 
 fn typed_as_bytes<T: 'static>(data: Box<[T]>) -> Box<[u8]> {
