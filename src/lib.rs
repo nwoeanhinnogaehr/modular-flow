@@ -19,10 +19,10 @@ use std::slice;
 use std::any::TypeId;
 use std::borrow::Cow;
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct NodeId(pub usize);
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct PortId(pub usize);
 
 pub struct Graph<Module> {
@@ -52,6 +52,9 @@ impl<Module> Graph<Module> {
     pub fn nodes(&self) -> Vec<Arc<Node<Module>>> {
         self.nodes.read().unwrap().values().cloned().collect()
     }
+    pub fn node_map(&self) -> HashMap<NodeId, Arc<Node<Module>>> {
+        self.nodes.read().unwrap().clone()
+    }
 
     fn generate_id(&self) -> usize {
         self.id_counter.fetch_add(1, Ordering::SeqCst)
@@ -61,17 +64,15 @@ impl<Module> Graph<Module> {
 pub struct Node<Module> {
     ifc: Arc<Interface<Module>>,
     module: Module,
-    meta: MetaModule<Module>,
 }
 
 impl<Module> Node<Module> {
     fn new(graph: &Arc<Graph<Module>>, meta: &MetaModule<Module>) -> Arc<Node<Module>> {
-        let ifc = Arc::new(Interface::new(graph));
+        let ifc = Arc::new(Interface::new(graph, MetaModule::clone(meta)));
         let module = (meta.new)(ifc.clone());
         Arc::new(Node {
             ifc,
             module,
-            meta: MetaModule::clone(meta),
         })
     }
 
@@ -79,7 +80,7 @@ impl<Module> Node<Module> {
         &self.module
     }
     pub fn meta(&self) -> &MetaModule<Module> {
-        &self.meta
+        self.ifc.meta()
     }
 
     pub fn id(&self) -> NodeId {
@@ -97,17 +98,22 @@ pub struct Interface<Module> {
     id: NodeId,
     ports: RwLock<HashMap<PortId, Arc<Port>>>,
     graph: Weak<Graph<Module>>,
+    meta: MetaModule<Module>,
 }
 
 impl<Module> Interface<Module> {
-    fn new(graph: &Arc<Graph<Module>>) -> Interface<Module> {
+    fn new(graph: &Arc<Graph<Module>>, meta: MetaModule<Module>) -> Interface<Module> {
         Interface {
             id: NodeId(graph.generate_id()),
             ports: RwLock::new(HashMap::new()),
             graph: Arc::downgrade(graph),
+            meta,
         }
     }
 
+    pub fn meta(&self) -> &MetaModule<Module> {
+        &self.meta
+    }
     pub fn id(&self) -> NodeId {
         self.id
     }
@@ -156,15 +162,15 @@ impl<Module> Interface<Module> {
 
 pub struct MetaModule<Module> {
     pub name: Cow<'static, str>,
-    pub new: fn(Arc<Interface<Module>>) -> Module,
+    pub new: Arc<Fn(Arc<Interface<Module>>) -> Module>,
 }
 
 impl<Module> MetaModule<Module> {
     pub fn new(name: impl Into<Cow<'static, str>>,
-               new: fn(Arc<Interface<Module>>) -> Module)-> MetaModule<Module> {
+               new: Arc<Fn(Arc<Interface<Module>>) -> Module>)-> MetaModule<Module> {
         MetaModule {
             name: name.into(),
-            new,
+            new: new,
         }
     }
 }
@@ -174,7 +180,7 @@ impl<T> Clone for MetaModule<T> {
     fn clone(&self) -> Self {
         MetaModule {
             name: self.name.clone(),
-            new: self.new,
+            new: self.new.clone(),
         }
     }
 }
