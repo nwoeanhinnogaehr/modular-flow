@@ -19,40 +19,52 @@ use std::slice;
 use std::any::TypeId;
 use std::borrow::Cow;
 
+pub trait Module {
+    type Args;
+}
+
+// HKT please?
+impl<T: ?Sized> Module for Mutex<T> where T: Module {
+    type Args = T::Args;
+}
+impl<T: ?Sized> Module for Box<T> where T: Module {
+    type Args = T::Args;
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct NodeId(pub usize);
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct PortId(pub usize);
 
-pub struct Graph<Module> {
-    nodes: RwLock<HashMap<NodeId, Arc<Node<Module>>>>,
+pub struct Graph<T: Module> {
+    nodes: RwLock<HashMap<NodeId, Arc<Node<T>>>>,
     id_counter: AtomicUsize,
 }
 
-impl<Module> Graph<Module> {
-    pub fn new() -> Arc<Graph<Module>> {
+impl<T: Module> Graph<T> {
+    pub fn new() -> Arc<Graph<T>> {
         Arc::new(Graph {
             nodes: RwLock::new(HashMap::new()),
             id_counter: 0.into(),
         })
     }
-    pub fn add_node(self: &Arc<Graph<Module>>, meta: &MetaModule<Module>) -> Arc<Node<Module>> {
-        let node = Node::new(self, meta);
+    pub fn add_node(self: &Arc<Graph<T>>, meta: &MetaModule<T>, args: T::Args) -> Arc<Node<T>> {
+        let node = Node::new(self, meta, args);
         self.nodes.write().unwrap().insert(node.id(), node.clone());
         node
     }
-    pub fn remove_node(&self, node: NodeId) -> Result<Arc<Node<Module>>, Error> {
+    pub fn remove_node(&self, node: NodeId) -> Result<Arc<Node<T>>, Error> {
         self.nodes
             .write()
             .unwrap()
             .remove(&node)
             .ok_or(Error::InvalidNode)
     }
-    pub fn nodes(&self) -> Vec<Arc<Node<Module>>> {
+    pub fn nodes(&self) -> Vec<Arc<Node<T>>> {
         self.nodes.read().unwrap().values().cloned().collect()
     }
-    pub fn node_map(&self) -> HashMap<NodeId, Arc<Node<Module>>> {
+    pub fn node_map(&self) -> HashMap<NodeId, Arc<Node<T>>> {
         self.nodes.read().unwrap().clone()
     }
 
@@ -61,25 +73,25 @@ impl<Module> Graph<Module> {
     }
 }
 
-pub struct Node<Module> {
-    ifc: Arc<Interface<Module>>,
-    module: Module,
+pub struct Node<T: Module> {
+    ifc: Arc<Interface<T>>,
+    module: T,
 }
 
-impl<Module> Node<Module> {
-    fn new(graph: &Arc<Graph<Module>>, meta: &MetaModule<Module>) -> Arc<Node<Module>> {
+impl<T: Module> Node<T> {
+    fn new(graph: &Arc<Graph<T>>, meta: &MetaModule<T>, args: T::Args) -> Arc<Node<T>> {
         let ifc = Arc::new(Interface::new(graph, MetaModule::clone(meta)));
-        let module = (meta.new)(ifc.clone());
+        let module = (meta.new)(ifc.clone(), args);
         Arc::new(Node {
             ifc,
             module,
         })
     }
 
-    pub fn module(&self) -> &Module {
+    pub fn module(&self) -> &T {
         &self.module
     }
-    pub fn meta(&self) -> &MetaModule<Module> {
+    pub fn meta(&self) -> &MetaModule<T> {
         self.ifc.meta()
     }
 
@@ -94,15 +106,15 @@ impl<Module> Node<Module> {
     }
 }
 
-pub struct Interface<Module> {
+pub struct Interface<T: Module> {
     id: NodeId,
     ports: RwLock<HashMap<PortId, Arc<Port>>>,
-    graph: Weak<Graph<Module>>,
-    meta: MetaModule<Module>,
+    graph: Weak<Graph<T>>,
+    meta: MetaModule<T>,
 }
 
-impl<Module> Interface<Module> {
-    fn new(graph: &Arc<Graph<Module>>, meta: MetaModule<Module>) -> Interface<Module> {
+impl<T: Module> Interface<T> {
+    fn new(graph: &Arc<Graph<T>>, meta: MetaModule<T>) -> Interface<T> {
         Interface {
             id: NodeId(graph.generate_id()),
             ports: RwLock::new(HashMap::new()),
@@ -111,7 +123,7 @@ impl<Module> Interface<Module> {
         }
     }
 
-    pub fn meta(&self) -> &MetaModule<Module> {
+    pub fn meta(&self) -> &MetaModule<T> {
         &self.meta
     }
     pub fn id(&self) -> NodeId {
@@ -149,25 +161,25 @@ impl<Module> Interface<Module> {
     pub fn poll(&self, port: &Port) -> Vec<Signal> {
         port.poll()
     }
-    pub fn write<T: 'static>(&self, port: &Port, data: impl Into<Box<[T]>>) -> Result<(), Error> {
+    pub fn write<D: 'static>(&self, port: &Port, data: impl Into<Box<[D]>>) -> Result<(), Error> {
         port.write(data.into())
     }
-    pub fn read<T: 'static>(&self, port: &Port) -> Result<Box<[T]>, Error> {
+    pub fn read<D: 'static>(&self, port: &Port) -> Result<Box<[D]>, Error> {
         port.read()
     }
-    pub fn read_n<T: 'static>(&self, port: &Port, n: usize) -> Result<Box<[T]>, Error> {
+    pub fn read_n<D: 'static>(&self, port: &Port, n: usize) -> Result<Box<[D]>, Error> {
         port.read_n(n)
     }
 }
 
-pub struct MetaModule<Module> {
+pub struct MetaModule<T: Module> {
     pub name: Cow<'static, str>,
-    pub new: Arc<Fn(Arc<Interface<Module>>) -> Module>,
+    pub new: Arc<Fn(Arc<Interface<T>>, T::Args) -> T>,
 }
 
-impl<Module> MetaModule<Module> {
+impl<T: Module> MetaModule<T> {
     pub fn new(name: impl Into<Cow<'static, str>>,
-               new: Arc<Fn(Arc<Interface<Module>>) -> Module>)-> MetaModule<Module> {
+               new: Arc<Fn(Arc<Interface<T>>, T::Args) -> T>)-> MetaModule<T> {
         MetaModule {
             name: name.into(),
             new: new,
@@ -176,7 +188,7 @@ impl<Module> MetaModule<Module> {
 }
 
 // need manual impl because derive doesn't play nice with generics
-impl<T> Clone for MetaModule<T> {
+impl<T: Module> Clone for MetaModule<T> {
     fn clone(&self) -> Self {
         MetaModule {
             name: self.name.clone(),
@@ -210,7 +222,7 @@ pub struct Port {
 }
 
 impl Port {
-    fn new<Module>(graph: &Graph<Module>, meta: &MetaPort) -> Arc<Port> {
+    fn new<T: Module>(graph: &Graph<T>, meta: &MetaPort) -> Arc<Port> {
         Arc::new(Port {
             meta: MetaPort::clone(meta),
             id: PortId(graph.generate_id()),
