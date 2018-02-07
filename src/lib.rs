@@ -19,41 +19,57 @@ use std::slice;
 use std::any::TypeId;
 use std::borrow::Cow;
 
+/// This trait must be implemented by the inner data type of the graph.
 pub trait Module {
-    type Args;
+    /// Argument for construction of the module.
+    type Arg;
 }
 
 // HKT please?
-impl<T: ?Sized> Module for Mutex<T> where T: Module {
-    type Args = T::Args;
+impl<T: ?Sized> Module for Mutex<T>
+where
+    T: Module,
+{
+    type Arg = T::Arg;
 }
-impl<T: ?Sized> Module for Box<T> where T: Module {
-    type Args = T::Args;
+impl<T: ?Sized> Module for Box<T>
+where
+    T: Module,
+{
+    type Arg = T::Arg;
 }
 
+/// A lightweight persistent identifier for a node.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct NodeId(pub usize);
 
+/// A lightweight persistent identifier for a port. Only gauranteeed to be unique within a specific
+/// node.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct PortId(pub usize);
 
+/// A graph holds a collection of Nodes. Nodes have a collection of Ports. Ports can be connected
+/// to each other one-to-one.
 pub struct Graph<T: Module> {
     nodes: RwLock<HashMap<NodeId, Arc<Node<T>>>>,
     id_counter: AtomicUsize,
 }
 
 impl<T: Module> Graph<T> {
+    /// Make a new empty graph.
     pub fn new() -> Arc<Graph<T>> {
         Arc::new(Graph {
             nodes: RwLock::new(HashMap::new()),
             id_counter: 0.into(),
         })
     }
-    pub fn add_node(self: &Arc<Graph<T>>, meta: &MetaModule<T>, args: T::Args) -> Arc<Node<T>> {
-        let node = Node::new(self, meta, args);
+    /// Construct a new node from the given metadata and argument.
+    pub fn add_node(self: &Arc<Graph<T>>, meta: &MetaModule<T>, arg: T::Arg) -> Arc<Node<T>> {
+        let node = Node::new(self, meta, arg);
         self.nodes.write().unwrap().insert(node.id(), node.clone());
         node
     }
+    /// Delete a node by id.
     pub fn remove_node(&self, node: NodeId) -> Result<Arc<Node<T>>, Error> {
         self.nodes
             .write()
@@ -61,9 +77,11 @@ impl<T: Module> Graph<T> {
             .remove(&node)
             .ok_or(Error::InvalidNode)
     }
+    /// Returns a vector containing references to all nodes active at the time of the call.
     pub fn nodes(&self) -> Vec<Arc<Node<T>>> {
         self.nodes.read().unwrap().values().cloned().collect()
     }
+    /// Returns a hash map from id to node references for all nodes active at the time of the call.
     pub fn node_map(&self) -> HashMap<NodeId, Arc<Node<T>>> {
         self.nodes.read().unwrap().clone()
     }
@@ -73,39 +91,45 @@ impl<T: Module> Graph<T> {
     }
 }
 
+/// A node is the public interface for generic functionality on a module in the graph.
+/// It holds a `Module`.
 pub struct Node<T: Module> {
     ifc: Arc<Interface<T>>,
     module: T,
 }
 
 impl<T: Module> Node<T> {
-    fn new(graph: &Arc<Graph<T>>, meta: &MetaModule<T>, args: T::Args) -> Arc<Node<T>> {
+    fn new(graph: &Arc<Graph<T>>, meta: &MetaModule<T>, arg: T::Arg) -> Arc<Node<T>> {
         let ifc = Arc::new(Interface::new(graph, MetaModule::clone(meta)));
-        let module = (meta.new)(ifc.clone(), args);
-        Arc::new(Node {
-            ifc,
-            module,
-        })
+        let module = (meta.new)(ifc.clone(), arg);
+        Arc::new(Node { ifc, module })
     }
 
+    /// Get a reference to the module held by this node.
     pub fn module(&self) -> &T {
         &self.module
     }
+    /// Get a reference to the metadata associated with this node.
     pub fn meta(&self) -> &MetaModule<T> {
         self.ifc.meta()
     }
-
+    /// Get the node ID.
     pub fn id(&self) -> NodeId {
         self.ifc.id()
     }
-    pub fn find_port(&self, name: &'static str) -> Arc<Port> {
+    /// Find a port by name (name is held within the associated `MetaPort`)
+    pub fn find_port(&self, name: &'static str) -> Option<Arc<Port>> {
         self.ifc.find_port(name)
     }
+    /// Get a vector of references to all associated ports at the time of the call.
     pub fn ports(&self) -> Vec<Arc<Port>> {
         self.ifc.ports()
     }
 }
 
+/// The private interface for a module. The module is provided with an `Interface` upon construction.
+/// An `Interface` has a superset of the functionality of a `Node`. It can be used to manipulate the
+/// associated Ports.
 pub struct Interface<T: Module> {
     id: NodeId,
     ports: RwLock<HashMap<PortId, Arc<Port>>>,
@@ -122,31 +146,35 @@ impl<T: Module> Interface<T> {
             meta,
         }
     }
-
+    /// Get a reference to the metadata associated with this node.
     pub fn meta(&self) -> &MetaModule<T> {
         &self.meta
     }
+    /// Get the node ID.
     pub fn id(&self) -> NodeId {
         self.id
     }
-    pub fn find_port(&self, name: &str) -> Arc<Port> {
+    /// Find a port by name (name is held within the associated `MetaPort`)
+    pub fn find_port(&self, name: &str) -> Option<Arc<Port>> {
         self.ports
             .read()
             .unwrap()
             .iter()
             .find(|&(_, port)| port.meta.name == name)
-            .unwrap()
-            .1
-            .clone()
+            .map(|port| port.1)
+            .cloned()
     }
+    /// Get a vector of references to all associated ports at the time of the call.
     pub fn ports(&self) -> Vec<Arc<Port>> {
         self.ports.read().unwrap().values().cloned().collect()
     }
+    /// Add a new port using the given metadata.
     pub fn add_port(&self, meta: &MetaPort) -> Arc<Port> {
         let port = Port::new(&self.graph.upgrade().unwrap(), meta);
         self.ports.write().unwrap().insert(port.id, port.clone());
         port
     }
+    /// Remove a port by ID.
     pub fn remove_port(&self, port: PortId) -> Result<Arc<Port>, Error> {
         self.ports
             .write()
@@ -155,35 +183,48 @@ impl<T: Module> Interface<T> {
             .ok_or(Error::InvalidPort)
     }
 
+    /// Wait (block) until a `Signal` is received on a port.
     pub fn wait(&self, port: &Port) -> Signal {
         port.wait()
     }
+    /// Get a vector of all unread Signals on a port.
     pub fn poll(&self, port: &Port) -> Vec<Signal> {
         port.poll()
     }
+    /// Write data to a port.
     pub fn write<D: 'static>(&self, port: &Port, data: impl Into<Box<[D]>>) -> Result<(), Error> {
         port.write(data.into())
     }
+    /// Read all available data from a port.
     pub fn read<D: 'static>(&self, port: &Port) -> Result<Box<[D]>, Error> {
         port.read()
     }
+    /// Read exactly `n` values from a port.
     pub fn read_n<D: 'static>(&self, port: &Port, n: usize) -> Result<Box<[D]>, Error> {
         port.read_n(n)
     }
 }
 
+/// Module metadata.
 pub struct MetaModule<T: Module> {
-    pub name: Cow<'static, str>,
-    pub new: Arc<Fn(Arc<Interface<T>>, T::Args) -> T>,
+    name: Cow<'static, str>,
+    new: Arc<Fn(Arc<Interface<T>>, T::Arg) -> T>,
 }
 
 impl<T: Module> MetaModule<T> {
-    pub fn new(name: impl Into<Cow<'static, str>>,
-               new: Arc<Fn(Arc<Interface<T>>, T::Args) -> T>)-> MetaModule<T> {
+    /// Construct new module metadata with the given name and constructor.
+    pub fn new(
+        name: impl Into<Cow<'static, str>>,
+        new: Arc<Fn(Arc<Interface<T>>, T::Arg) -> T>,
+    ) -> MetaModule<T> {
         MetaModule {
             name: name.into(),
             new: new,
         }
+    }
+    /// Get the module name.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -197,6 +238,7 @@ impl<T: Module> Clone for MetaModule<T> {
     }
 }
 
+/// Port metadata.
 #[derive(Clone)]
 pub struct MetaPort {
     name: Cow<'static, str>,
@@ -204,14 +246,23 @@ pub struct MetaPort {
 }
 
 impl MetaPort {
+    /// Construct new port metadata with the given datatype and name.
     pub fn new<T: 'static, N: Into<Cow<'static, str>>>(name: N) -> MetaPort {
         MetaPort {
             name: name.into(),
             ty: TypeId::of::<T>(),
         }
     }
+    /// Get the port name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
+/// Ports are the connection points of modules. They can be connected one-to-one with other ports,
+/// and allow a single type of data (runtime checked) to flow bidirectionally.
+///
+/// TODO allow different input and output types.
 pub struct Port {
     meta: MetaPort,
     id: PortId,
@@ -233,9 +284,12 @@ impl Port {
         })
     }
 
+    /// Get the associated metadata.
     pub fn meta(&self) -> &MetaPort {
         &self.meta
     }
+    /// Connect this port to another.
+    /// TODO: think about error handling and race conditions
     pub fn connect(self: Arc<Port>, other: Arc<Port>) {
         assert!(self.meta.ty == other.meta.ty);
         self.set_edge(Some(&other));
@@ -243,6 +297,8 @@ impl Port {
         self.signal(Signal::Connect);
         other.signal(Signal::Connect);
     }
+    /// Disconnect this port from another.
+    /// TODO: WTF was I thinking when I wrote this???
     pub fn disconnect(self: Arc<Port>, other: Arc<Port>) {
         self.set_edge(None);
         other.set_edge(None);
@@ -301,6 +357,7 @@ impl Port {
     }
 }
 
+/// Error cases
 #[derive(Debug)]
 pub enum Error {
     NotConnected,
@@ -309,6 +366,7 @@ pub enum Error {
     NotAvailable,
 }
 
+/// Events occuring on a `Port`. Accessible via an `Interface`.
 #[derive(Debug)]
 pub enum Signal {
     Abort,

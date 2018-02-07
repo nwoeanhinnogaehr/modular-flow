@@ -4,9 +4,3 @@ version = "0.2.0"
 authors = ["Noah Weninger <nweninge@ualberta.ca>"]
 
 [dependencies]
-num-complex = "*"
-serde_derive = "*"
-
-[dependencies.serde]
-version = "*"
-features = ["rc"]
