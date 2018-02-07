@@ -20,6 +20,8 @@ use std::any::TypeId;
 use std::borrow::Cow;
 
 /// This trait must be implemented by the inner data type of the graph.
+/// Careful: Make sure your module doesn't hold an `Arc<Node>` or cyclic references may prevent it
+/// from being dropped.
 pub trait Module {
     /// Argument for construction of the module.
     type Arg;
