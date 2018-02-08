@@ -27,20 +27,6 @@ pub trait Module {
     type Arg;
 }
 
-// HKT please?
-impl<T: ?Sized> Module for Mutex<T>
-where
-    T: Module,
-{
-    type Arg = T::Arg;
-}
-impl<T: ?Sized> Module for Box<T>
-where
-    T: Module,
-{
-    type Arg = T::Arg;
-}
-
 /// A lightweight persistent identifier for a node.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct NodeId(pub usize);
