@@ -278,16 +278,16 @@ impl Port {
     }
     /// Connect this port to another.
     /// TODO: think about error handling and race conditions
-    pub fn connect(self: Arc<Port>, other: Arc<Port>) {
+    pub fn connect(self: &Arc<Port>, other: &Arc<Port>) {
         assert!(self.meta.ty == other.meta.ty);
-        self.set_edge(Some(&other));
-        other.set_edge(Some(&self));
+        self.set_edge(Some(other));
+        other.set_edge(Some(self));
         self.signal(Signal::Connect);
         other.signal(Signal::Connect);
     }
     /// Disconnect this port from another.
     /// TODO: WTF was I thinking when I wrote this???
-    pub fn disconnect(self: Arc<Port>, other: Arc<Port>) {
+    pub fn disconnect(self: &Arc<Port>, other: &Arc<Port>) {
         self.set_edge(None);
         other.set_edge(None);
         self.signal(Signal::Disconnect);
