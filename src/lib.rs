@@ -251,6 +251,7 @@ impl MetaPort {
 /// and allow a single type of data (runtime checked) to flow bidirectionally.
 ///
 /// TODO allow different input and output types.
+/// TODO think about interactions/problems with multiple graphs
 pub struct Port {
     meta: MetaPort,
     id: PortId,
@@ -276,27 +277,91 @@ impl Port {
     pub fn meta(&self) -> &MetaPort {
         &self.meta
     }
-    /// Connect this port to another.
-    /// TODO: think about error handling and race conditions
-    pub fn connect(self: &Arc<Port>, other: &Arc<Port>) {
-        assert!(self.meta.ty == other.meta.ty);
-        self.set_edge(Some(other));
-        other.set_edge(Some(self));
-        self.signal(Signal::Connect);
-        other.signal(Signal::Connect);
+    /// Get the PortId.
+    pub fn id(&self) -> PortId {
+        self.id
     }
-    /// Disconnect this port from another.
-    /// TODO: WTF was I thinking when I wrote this???
-    pub fn disconnect(self: &Arc<Port>, other: &Arc<Port>) {
-        self.set_edge(None);
-        other.set_edge(None);
-        self.signal(Signal::Disconnect);
-        other.signal(Signal::Disconnect);
+    /// Connect this port to another.
+    /// Fails with ConnectError::TypeMismatch if the ports have different data types.
+    /// Fails with ConnectError::AlreadyConnected if either port is already connected.
+    pub fn connect(self: &Arc<Port>, other: &Arc<Port>) -> Result<(), ConnectError> {
+        if self.meta.ty != other.meta.ty {
+            return Err(ConnectError::TypeMismatch);
+        }
+        if Arc::ptr_eq(self, other) {
+            // self edges are currently not supported
+            unimplemented!();
+        } else {
+            // always lock the port with lower id first to prevent deadlock
+            // (circular wait condition)
+            let (a, b) = if self.id().0 < other.id().0 {
+                (self, other)
+            } else {
+                (other, self)
+            };
+            let mut a_edge = a.edge.write().unwrap();
+            let mut b_edge = b.edge.write().unwrap();
+            if a_edge.as_ref().and_then(|x| x.upgrade()).is_some()
+                || b_edge.as_ref().and_then(|x| x.upgrade()).is_some()
+            {
+                return Err(ConnectError::AlreadyConnected);
+            }
+            *a_edge = Some(Arc::downgrade(b));
+            *b_edge = Some(Arc::downgrade(a));
+            a.signal(Signal::Connect);
+            b.signal(Signal::Connect);
+            Ok(())
+        }
     }
 
-    fn set_edge(&self, other: Option<&Arc<Port>>) {
-        *self.edge.write().unwrap() = other.map(|x| Arc::downgrade(&x));
+    /// Disconnect this port from another.
+    /// Fails with ConnectError::NotConnected if the port is already disconnected.
+    pub fn disconnect(self: &Arc<Port>) -> Result<(), ConnectError> {
+        // similarly to with `connect`, we need to lock the edges of the two ports in
+        // a deterministic order to prevent a deadlock.
+        // but here, we don't know the other port until we lock this port.
+        // so, we read the other port with `edge()`, lock the two in the required order,
+        // verify nothing changed in between reading and locking,
+        // then finally clear the connection.
+        // if verification fails we race again until it succeeds.
+        loop {
+            let other = &self.edge().ok_or(ConnectError::NotConnected)?;
+            if Arc::ptr_eq(other, self) {
+                // self edges are currently not supported
+                unimplemented!();
+            } else {
+                let (mut self_edge, mut other_edge);
+                if self.id().0 < other.id().0 {
+                    self_edge = self.edge.write().unwrap();
+                    other_edge = other.edge.write().unwrap();
+                } else {
+                    other_edge = other.edge.write().unwrap();
+                    self_edge = self.edge.write().unwrap();
+                };
+                // check that the port this one is connected to hasn't changed in between
+                // finding `other` and locking the edges
+                if !self_edge
+                    .as_ref()
+                    .and_then(|x| x.upgrade())
+                    .map(|self_other| Arc::ptr_eq(other, &self_other))
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                // other should definitely be connected to self if we made it here
+                assert!(Arc::ptr_eq(
+                    &other_edge.as_ref().unwrap().upgrade().unwrap(),
+                    self
+                ));
+                *self_edge = None;
+                *other_edge = None;
+                self.signal(Signal::Disconnect);
+                other.signal(Signal::Disconnect);
+                break Ok(());
+            }
+        }
     }
+
     fn edge(&self) -> Option<Arc<Port>> {
         self.edge.read().unwrap().clone().and_then(|x| x.upgrade())
     }
@@ -343,6 +408,13 @@ impl Port {
         let out = iter.collect::<Vec<_>>().into();
         Ok(bytes_as_typed(out))
     }
+}
+
+#[derive(Debug)]
+pub enum ConnectError {
+    AlreadyConnected,
+    TypeMismatch,
+    NotConnected,
 }
 
 /// Error cases
