@@ -401,6 +401,7 @@ impl Port {
     fn read_n<T: 'static>(&self, n: usize) -> Result<Box<[T]>, Error> {
         assert!(self.meta.ty == TypeId::of::<T>());
         let mut buf = self.buffer.lock().unwrap();
+        let n = n * mem::size_of::<T>();
         if n > buf.len() {
             return Err(Error::NotAvailable);
         }
@@ -442,7 +443,7 @@ fn typed_as_bytes<T: 'static>(data: Box<[T]>) -> Box<[u8]> {
 }
 
 fn bytes_as_typed<T: 'static>(data: Box<[u8]>) -> Box<[T]> {
-    assert!(data.len() % mem::size_of::<T>() == 0);
+    assert_eq!(data.len() % mem::size_of::<T>(), 0);
     let size = data.len() / mem::size_of::<T>();
     let raw = Box::into_raw(data);
     unsafe { Box::from_raw(slice::from_raw_parts_mut(raw as *mut T, size)) }
