@@ -19,14 +19,6 @@ use std::slice;
 use std::any::TypeId;
 use std::borrow::Cow;
 
-/// This trait must be implemented by the inner data type of the graph.
-/// Careful: Make sure your module doesn't hold an `Arc<Node>` or cyclic references may prevent it
-/// from being dropped.
-pub trait Module {
-    /// Argument for construction of the module.
-    type Arg;
-}
-
 /// A lightweight persistent identifier for a node.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct NodeId(pub usize);
@@ -38,27 +30,28 @@ pub struct PortId(pub usize);
 
 /// A graph holds a collection of Nodes. Nodes have a collection of Ports. Ports can be connected
 /// to each other one-to-one.
-pub struct Graph<T: Module> {
-    nodes: RwLock<HashMap<NodeId, Arc<Node<T>>>>,
+pub struct Graph {
+    nodes: RwLock<HashMap<NodeId, Arc<Node>>>,
     id_counter: AtomicUsize,
 }
 
-impl<T: Module> Graph<T> {
+impl Graph {
     /// Make a new empty graph.
-    pub fn new() -> Arc<Graph<T>> {
+    pub fn new() -> Arc<Graph> {
         Arc::new(Graph {
             nodes: RwLock::new(HashMap::new()),
             id_counter: 0.into(),
         })
     }
     /// Construct a new node from the given metadata and argument.
-    pub fn add_node(self: &Arc<Graph<T>>, meta: &MetaModule<T>, arg: T::Arg) -> Arc<Node<T>> {
-        let node = Node::new(self, meta, arg);
-        self.nodes.write().unwrap().insert(node.id(), node.clone());
-        node
+    pub fn add_node(self: &Arc<Graph>) -> Arc<Interface> {
+        let ifc = Arc::new(Interface::new(self));
+        let node = Arc::new(Node { ifc: ifc.clone() });
+        self.nodes.write().unwrap().insert(node.id(), node);
+        ifc
     }
     /// Delete a node by id.
-    pub fn remove_node(&self, node: NodeId) -> Result<Arc<Node<T>>, Error> {
+    pub fn remove_node(&self, node: NodeId) -> Result<Arc<Node>, Error> {
         self.nodes
             .write()
             .unwrap()
@@ -66,12 +59,16 @@ impl<T: Module> Graph<T> {
             .ok_or(Error::InvalidNode)
     }
     /// Returns a vector containing references to all nodes active at the time of the call.
-    pub fn nodes(&self) -> Vec<Arc<Node<T>>> {
+    pub fn nodes(&self) -> Vec<Arc<Node>> {
         self.nodes.read().unwrap().values().cloned().collect()
     }
     /// Returns a hash map from id to node references for all nodes active at the time of the call.
-    pub fn node_map(&self) -> HashMap<NodeId, Arc<Node<T>>> {
+    pub fn node_map(&self) -> HashMap<NodeId, Arc<Node>> {
         self.nodes.read().unwrap().clone()
+    }
+    /// Get a node by id.
+    pub fn node(&self, id: NodeId) -> Option<Arc<Node>> {
+        self.nodes.read().unwrap().get(&id).cloned()
     }
 
     fn generate_id(&self) -> usize {
@@ -81,26 +78,11 @@ impl<T: Module> Graph<T> {
 
 /// A node is the public interface for generic functionality on a module in the graph.
 /// It holds a `Module`.
-pub struct Node<T: Module> {
-    ifc: Arc<Interface<T>>,
-    module: T,
+pub struct Node {
+    ifc: Arc<Interface>,
 }
 
-impl<T: Module> Node<T> {
-    fn new(graph: &Arc<Graph<T>>, meta: &MetaModule<T>, arg: T::Arg) -> Arc<Node<T>> {
-        let ifc = Arc::new(Interface::new(graph, MetaModule::clone(meta)));
-        let module = (meta.new)(ifc.clone(), arg);
-        Arc::new(Node { ifc, module })
-    }
-
-    /// Get a reference to the module held by this node.
-    pub fn module(&self) -> &T {
-        &self.module
-    }
-    /// Get a reference to the metadata associated with this node.
-    pub fn meta(&self) -> &MetaModule<T> {
-        self.ifc.meta()
-    }
+impl Node {
     /// Get the node ID.
     pub fn id(&self) -> NodeId {
         self.ifc.id()
@@ -118,25 +100,19 @@ impl<T: Module> Node<T> {
 /// The private interface for a module. The module is provided with an `Interface` upon construction.
 /// An `Interface` has a superset of the functionality of a `Node`. It can be used to manipulate the
 /// associated Ports.
-pub struct Interface<T: Module> {
+pub struct Interface {
     id: NodeId,
     ports: RwLock<HashMap<PortId, Arc<Port>>>,
-    graph: Weak<Graph<T>>,
-    meta: MetaModule<T>,
+    graph: Weak<Graph>,
 }
 
-impl<T: Module> Interface<T> {
-    fn new(graph: &Arc<Graph<T>>, meta: MetaModule<T>) -> Interface<T> {
+impl Interface {
+    fn new(graph: &Arc<Graph>) -> Interface {
         Interface {
             id: NodeId(graph.generate_id()),
             ports: RwLock::new(HashMap::new()),
             graph: Arc::downgrade(graph),
-            meta,
         }
-    }
-    /// Get a reference to the metadata associated with this node.
-    pub fn meta(&self) -> &MetaModule<T> {
-        &self.meta
     }
     /// Get the node ID.
     pub fn id(&self) -> NodeId {
@@ -193,52 +169,26 @@ impl<T: Module> Interface<T> {
     }
 }
 
-/// Module metadata.
-pub struct MetaModule<T: Module> {
-    name: Cow<'static, str>,
-    new: Arc<Fn(Arc<Interface<T>>, T::Arg) -> T>,
-}
-
-impl<T: Module> MetaModule<T> {
-    /// Construct new module metadata with the given name and constructor.
-    pub fn new(
-        name: impl Into<Cow<'static, str>>,
-        new: Arc<Fn(Arc<Interface<T>>, T::Arg) -> T>,
-    ) -> MetaModule<T> {
-        MetaModule {
-            name: name.into(),
-            new: new,
-        }
-    }
-    /// Get the module name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-// need manual impl because derive doesn't play nice with generics
-impl<T: Module> Clone for MetaModule<T> {
-    fn clone(&self) -> Self {
-        MetaModule {
-            name: self.name.clone(),
-            new: self.new.clone(),
-        }
-    }
-}
-
 /// Port metadata.
 #[derive(Clone)]
 pub struct MetaPort {
     name: Cow<'static, str>,
-    ty: TypeId,
+    in_ty: TypeId,
+    out_ty: TypeId,
 }
 
 impl MetaPort {
     /// Construct new port metadata with the given datatype and name.
-    pub fn new<T: 'static, N: Into<Cow<'static, str>>>(name: N) -> MetaPort {
+    pub fn new<InT: 'static, OutT: 'static, N: Into<Cow<'static, str>>>(name: N) -> MetaPort {
+        // sending ZSTs doesn't really make sense,
+        // and will cause all kinds of confusing behavior like having
+        // an infinite number of items available to read
+        assert!(mem::size_of::<InT>() != 0);
+        assert!(mem::size_of::<OutT>() != 0);
         MetaPort {
             name: name.into(),
-            ty: TypeId::of::<T>(),
+            in_ty: TypeId::of::<InT>(),
+            out_ty: TypeId::of::<OutT>(),
         }
     }
     /// Get the port name.
@@ -250,7 +200,6 @@ impl MetaPort {
 /// Ports are the connection points of modules. They can be connected one-to-one with other ports,
 /// and allow a single type of data (runtime checked) to flow bidirectionally.
 ///
-/// TODO allow different input and output types.
 /// TODO think about interactions/problems with multiple graphs
 pub struct Port {
     meta: MetaPort,
@@ -262,7 +211,7 @@ pub struct Port {
 }
 
 impl Port {
-    fn new<T: Module>(graph: &Graph<T>, meta: &MetaPort) -> Arc<Port> {
+    fn new(graph: &Graph, meta: &MetaPort) -> Arc<Port> {
         Arc::new(Port {
             meta: MetaPort::clone(meta),
             id: PortId(graph.generate_id()),
@@ -285,7 +234,7 @@ impl Port {
     /// Fails with ConnectError::TypeMismatch if the ports have different data types.
     /// Fails with ConnectError::AlreadyConnected if either port is already connected.
     pub fn connect(self: &Arc<Port>, other: &Arc<Port>) -> Result<(), ConnectError> {
-        if self.meta.ty != other.meta.ty {
+        if self.meta.in_ty != other.meta.out_ty || self.meta.out_ty != other.meta.in_ty {
             return Err(ConnectError::TypeMismatch);
         }
         if Arc::ptr_eq(self, other) {
@@ -383,7 +332,7 @@ impl Port {
         lock.pop_front().unwrap()
     }
     fn write<T: 'static>(&self, data: impl Into<Box<[T]>>) -> Result<(), Error> {
-        assert!(self.meta.ty == TypeId::of::<T>());
+        assert!(self.meta.out_ty == TypeId::of::<T>());
         let bytes = typed_as_bytes(data.into());
         let other = self.edge().ok_or(Error::NotConnected)?;
         let mut buf = other.buffer.lock().unwrap();
@@ -392,14 +341,14 @@ impl Port {
         Ok(())
     }
     fn read<T: 'static>(&self) -> Result<Box<[T]>, Error> {
-        assert!(self.meta.ty == TypeId::of::<T>());
+        assert!(self.meta.in_ty == TypeId::of::<T>());
         let mut buf = self.buffer.lock().unwrap();
         let iter = buf.drain(..);
         let out = iter.collect::<Vec<_>>().into();
         Ok(bytes_as_typed(out))
     }
     fn read_n<T: 'static>(&self, n: usize) -> Result<Box<[T]>, Error> {
-        assert!(self.meta.ty == TypeId::of::<T>());
+        assert!(self.meta.in_ty == TypeId::of::<T>());
         let mut buf = self.buffer.lock().unwrap();
         let n = n * mem::size_of::<T>();
         if n > buf.len() {
@@ -428,7 +377,7 @@ pub enum Error {
 }
 
 /// Events occuring on a `Port`. Accessible via an `Interface`.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Signal {
     Abort,
     Write,
@@ -443,7 +392,7 @@ fn typed_as_bytes<T: 'static>(data: Box<[T]>) -> Box<[u8]> {
 }
 
 fn bytes_as_typed<T: 'static>(data: Box<[u8]>) -> Box<[T]> {
-    assert_eq!(data.len() % mem::size_of::<T>(), 0);
+    assert_eq!(data.len() % mem::size_of::<T>(), 0); // ensure alignment
     let size = data.len() / mem::size_of::<T>();
     let raw = Box::into_raw(data);
     unsafe { Box::from_raw(slice::from_raw_parts_mut(raw as *mut T, size)) }
